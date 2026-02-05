@@ -38,7 +38,7 @@ SPSCQueue<MarketEvent, QCAP>& md_q_for(uint32_t id) {
     if (id == 2) return md2;
     return md99;
 }
-} // namespace
+} 
 
 // ===================== Submit Order (trader -> engine queue) =====================
 void submit_order(bool is_buy,
@@ -92,7 +92,7 @@ void engine_loop() {
     auto should_stop = [&]() -> bool {
         if (running.load(std::memory_order_relaxed)) return false;
         if (pending_orders.load(std::memory_order_acquire) > 0) return false;
-        return true; // keep it simple
+        return true; 
     };
 
     publish_event(++ev_seq, market_price.load(std::memory_order_relaxed));
@@ -125,11 +125,9 @@ void engine_loop() {
         }
         rr = (rr + 1) % oqs.size();
 
-        // Deterministic ordering by seq
         std::sort(batch.begin(), batch.end(),
                   [](const Command& a, const Command& b){ return a.o.seq < b.o.seq; });
 
-        // Apply to book
         for (auto& cmd : batch) {
             if (cmd.o.is_buy) bids.push(cmd.o);
             else asks.push(cmd.o);
@@ -145,7 +143,7 @@ void engine_loop() {
             int traded_qty = std::min(buy.qty, sell.qty);
             if (traded_qty <= 0) continue;
 
-            double trade_px = sell.limit_px; // simple rule
+            double trade_px = sell.limit_px; 
             market_price.store(trade_px, std::memory_order_relaxed);
             push_price(trade_px);
 
@@ -191,7 +189,7 @@ bool pop_latest_event(uint32_t id, MarketEvent& out) {
     return got;
 }
 
-// Baseline MA strategy (like your original 0/1):
+// Baseline MA strategy 
 // - uses compute_ma_or_price(): lock + sum over deque (extra overhead)
 // - uses market_price atomic
 void ma_strategy_baseline(uint32_t id) {
@@ -265,7 +263,7 @@ void ma_strategy_fast(uint32_t id) {
     }
 }
 
-// Chaos strategy (unchanged behavior, just event-driven for timing)
+// Chaos strategy
 void chaos(uint32_t id) {
     thread_local std::mt19937 rng{std::random_device{}()};
     std::uniform_int_distribution<int> size_dist(1, 3);
