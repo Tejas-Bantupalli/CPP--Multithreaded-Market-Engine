@@ -66,7 +66,14 @@ def main():
     e4 = {s: F[("exp4_model", s)] for s in ("haiku", "sonnet", "opus")} if "exp4_model" in runs else {}
     e2 = {s: F[("exp2_persona", s)] for s in ("cautious", "aggressive", "maker")} if "exp2_persona" in runs else {}
     e3 = {s: F[("exp3_code", s)] for s in runs["exp3_code"]["subjects"]} if "exp3_code" in runs else {}
+    e5 = {s: F[("exp5_freecode", s)] for s in runs["exp5_freecode"]["subjects"]} if "exp5_freecode" in runs else {}
     ctrl = {r: [F[(r, s)] for s in runs[r]["subjects"]] for r in runs if r.startswith("ctrl_")}
+    champ = None
+    if "exp5_freecode" in runs:
+        bg = runs["exp5_freecode"]["background"]
+        # the champion is the last background agent (id 4); average its PnL over the generations run so far
+        champ = statistics.fmean(b["agents"][-1]["mean_pnl"] for b in bg) if bg and len(bg[0]["agents"]) >= 5 else None
+        best5 = max(e5.values(), key=lambda v: v["tail"]) if e5 else None
 
     llm_tails = [F[(r, s)]["tail"] for r in ("exp1_info", "exp2_persona") if r in runs for s in runs[r]["subjects"]]
     ctrl_tails = {r: statistics.fmean(x["tail"] for x in v) for r, v in ctrl.items()}
@@ -211,6 +218,7 @@ def main():
       <tr><td>2 · persona</td><td>who the agent is told it is</td><td>cautious · aggressive · market-making specialist</td><td>rivals visible, Opus, parameters</td></tr>
       <tr><td>3 · code</td><td>the action space</td><td>two agents writing C++ strategies from scratch (neutral and trend-following personas)</td><td>market statistics visible, Opus</td></tr>
       <tr><td>4 · model</td><td>which model runs the agent</td><td>Haiku 4.5 · Sonnet 5 · Opus 5</td><td>own PnL only, neutral persona, parameters</td></tr>
+      <tr><td>5 · free code vs champion</td><td>can unconstrained code beat tuned parameters</td><td>four C++-writing agents with four personas, rivals visible</td><td>background plus the best evolved market maker from experiment 4 as a fixed incumbent, Opus</td></tr>
       <tr><td>controls</td><td>no model at all</td><td>hill climbing · UCB bandit over strategy classes · imitation of the best rival</td><td>same seeds, same background, rivals visible</td></tr>
     </tbody>
   </table></div>
@@ -243,6 +251,13 @@ def main():
     <figure><div class="fig" id="chart-exp3"></div>
     <figcaption><b>Experiment 3, mean PnL per generation for the two code-writing agents.</b> Fills per session fell from thousands to hundreds as the agents diagnosed the spread cost from their own reports.</figcaption></figure>
   </div></div>
+
+  {"" if "exp5_freecode" not in runs else f'''<div class="finding"><div class="n">8</div><div>
+    <h3>Free code against a tuned champion</h3>
+    <p class="prose">Four agents writing C++ from scratch, each with a different persona and full sight of every rival, in a market that also contained the best market maker evolved in experiment 4. Over {max(v["n"] for v in e5.values())} generations the champion averaged {fmt(champ) if champ is not None else "n/a"} per session. The best coder, {best5["final_strategy"] if best5 else ""}, averaged {fmt(best5["tail"]) if best5 else "n/a"} over the last third of the run{" and beat it." if best5 and champ is not None and best5["tail"] > champ else " and did not catch it."} {sum(v["failures"] for v in e5.values())} of {sum(v["n"] for v in e5.values())} submissions failed to build or crashed in the smoke test.</p>
+    <figure><div class="fig" id="chart-exp5"></div>
+    <figcaption><b>Experiment 5, mean PnL per generation for the four code-writing agents.</b> The champion incumbent is drawn as the dashed reference. Personas: neutral, market-making specialist, trend follower, aggressive.</figcaption></figure>
+  </div></div>'''}
 
   <!-- ===================================================== ENGINEER -->
   <h2 id="engineer">For the engineer</h2>
@@ -308,7 +323,7 @@ scripts/report_page.py results/all.json --out docs/report.html</pre>
   const DATA = JSON.parse(document.getElementById('data').textContent);
   const runs = Object.fromEntries(DATA.runs.map(r => [r.name, r]));
   const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
-  const SERIES = ['--s1','--s2','--s3','--s4'];
+  const SERIES = ['--s1','--s2','--s3','--s4','--axis'];
   const tip = document.getElementById('tip');
   const fmt1 = x => (x >= 0 ? '+' : '') + x.toFixed(1);
 
@@ -339,7 +354,7 @@ scripts/report_page.py results/all.json --out docs/report.html</pre>
     series.forEach((s, i) => {{
       const c = `var(${{SERIES[i]}})`;
       const d = s.pts.map((p, k) => (k ? 'L' : 'M') + X(p.x) + ',' + Y(p.y)).join(' ');
-      svg += `<path d="${{d}}" fill="none" stroke="${{c}}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+      svg += `<path d="${{d}}" fill="none" stroke="${{c}}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"${{s.dashed ? ' stroke-dasharray="6 4"' : ''}}/>`;
       s.pts.forEach(p => svg += `<circle cx="${{X(p.x)}}" cy="${{Y(p.y)}}" r="4" fill="${{c}}" stroke="var(--panel)" stroke-width="2"/>`);
       const last = s.pts[s.pts.length - 1];
       svg += `<text class="lbl" x="${{X(last.x) + 10}}" y="${{Y(last.y) + 4 + (s.dy || 0)}}">${{s.name}} ${{fmt1(last.y)}}</text>`;
@@ -369,6 +384,13 @@ scripts/report_page.py results/all.json --out docs/report.html</pre>
   if (runs.exp1_info) lineChart(document.getElementById('chart-exp1'), 'Experiment 1 · context level · mean PnL ($)', curves('exp1_info', ['own', 'market', 'rivals'], ['own PnL only', 'plus market', 'plus rivals'], [0, -8, 8]));
   if (runs.exp2_persona) lineChart(document.getElementById('chart-exp2'), 'Experiment 2 · persona · mean PnL ($)', curves('exp2_persona', ['cautious', 'aggressive', 'maker'], ['cautious', 'aggressive', 'specialist'], [-8, 0, 8]));
   if (runs.exp3_code) lineChart(document.getElementById('chart-exp3'), 'Experiment 3 · code-writing agents · mean PnL ($)', curves('exp3_code', Object.keys(runs.exp3_code.subjects), null, [-6, 6]));
+  if (runs.exp5_freecode) {{
+    const names = Object.keys(runs.exp5_freecode.subjects);
+    const series = curves('exp5_freecode', names, null, [-9, -3, 3, 9]);
+    series.push({{ name: 'champion (fixed)', dashed: true, dy: 0,
+      pts: runs.exp5_freecode.background.map(b => ({{ x: b.generation, y: b.agents[b.agents.length - 1].mean_pnl, std: b.agents[b.agents.length - 1].std, hit: b.agents[b.agents.length - 1].hit_rate, fills: b.agents[b.agents.length - 1].fills }})) }});
+    lineChart(document.getElementById('chart-exp5'), 'Experiment 5 · free code vs champion · mean PnL ($)', series);
+  }}
   if (runs.exp4_model) lineChart(document.getElementById('chart-exp4'), 'Experiment 4 · model tier · mean PnL ($)', curves('exp4_model', ['haiku', 'sonnet', 'opus'], ['Haiku 4.5', 'Sonnet 5', 'Opus 5'], [8, 0, -8]));
 
   // ---------- strategy strip
@@ -376,7 +398,7 @@ scripts/report_page.py results/all.json --out docs/report.html</pre>
     const el = document.getElementById('strip-strategies'); if (!el) return;
     const COL = {{ mm: 'var(--s1)', momentum: 'var(--s2)', meanrev: 'var(--s3)', plugin: 'var(--s4)', fallback: 'var(--axis)' }};
     const SHORT = {{ mm: 'mm', momentum: 'mom', meanrev: 'rev', plugin: 'c++', fallback: '—' }};
-    const order = ['exp1_info', 'exp2_persona', 'exp4_model', 'exp3_code'].filter(n => runs[n]);
+    const order = ['exp1_info', 'exp2_persona', 'exp4_model', 'exp3_code', 'exp5_freecode'].filter(n => runs[n]);
     let n = 0; order.forEach(r => Object.values(runs[r].subjects).forEach(s => n = Math.max(n, s.curve.length)));
     let h = `<div class="head"><span class="title">Strategy class per generation</span></div><div class="strip" style="--n:${{n}}">`;
     h += `<div class="row"><span class="name"></span>${{Array.from({{length: n}}, (_, i) => `<span class="name" style="text-align:center">${{i}}</span>`).join('')}}</div>`;
@@ -396,7 +418,7 @@ scripts/report_page.py results/all.json --out docs/report.html</pre>
   (function() {{
     const el = document.getElementById('chart-controls'); if (!el) return;
     const groups = [];
-    ['exp1_info', 'exp2_persona', 'exp4_model', 'exp3_code', 'ctrl_hillclimb', 'ctrl_bandit', 'ctrl_imitate'].forEach(r => {{
+    ['exp1_info', 'exp2_persona', 'exp4_model', 'exp3_code', 'exp5_freecode', 'ctrl_hillclimb', 'ctrl_bandit', 'ctrl_imitate'].forEach(r => {{
       if (!runs[r]) return;
       groups.push({{ run: r.replace('exp', 'exp ').replace('ctrl_', 'control: ').replace('_', ' '), llm: !r.startsWith('ctrl_'),
         bars: Object.entries(runs[r].subjects).map(([n, s]) => {{ const t = s.curve.slice(-Math.max(1, Math.floor(s.curve.length / 3))); return {{ name: n, v: t.reduce((a, c) => a + c.score, 0) / t.length, sd: t.reduce((a, c) => a + c.std, 0) / t.length }}; }}) }});

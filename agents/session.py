@@ -173,7 +173,7 @@ def cmd_init(args):
     if len(set(names)) != len(names):
         raise SystemExit("subject names must be unique")
     cfg = {
-        "subjects": subjects, "background": [b for b in args.background.split(",") if b],
+        "subjects": subjects, "background": [b for b in args.background.split(";" if ";" in args.background else ",") if b],
         "seeds": args.seeds, "seconds": args.seconds, "generations": args.generations,
         "fixed_seeds": args.fixed_seeds, "parallel": args.parallel, "binary": args.binary,
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
