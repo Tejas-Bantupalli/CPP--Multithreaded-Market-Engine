@@ -21,6 +21,7 @@ void usage() {
         "  --idle MODE        agent idle policy: spin | yield | sleep (default yield)\n"
         "  --engine-idle MODE engine idle policy (default yield)\n"
         "  --pin              pin threads to cores (Linux only)\n"
+        "  --fanout MODE      broadcast path: spsc (one push per agent) | multicast (shared ring, default spsc)\n"
         "  --json PATH        write the report as JSON\n"
         "  --trades PATH      write a trade log CSV (off the hot path)\n"
         "  --cmdlog PATH      write every processed command as CSV, replayable with build/replay\n"
@@ -63,6 +64,12 @@ int main(int argc, char** argv) {
         else if (a == "--idle") { if (!parse_idle(need("a mode"), cfg.agent_idle)) { std::cerr << "bad idle mode\n"; return 2; } }
         else if (a == "--engine-idle") { if (!parse_idle(need("a mode"), cfg.engine_idle)) { std::cerr << "bad idle mode\n"; return 2; } }
         else if (a == "--pin") cfg.pin_threads = true;
+        else if (a == "--fanout") {
+            const std::string f = need("spsc|multicast");
+            if (f == "spsc") cfg.fanout = Fanout::Spsc;
+            else if (f == "multicast") cfg.fanout = Fanout::Multicast;
+            else { std::cerr << "bad fanout mode\n"; return 2; }
+        }
         else if (a == "--json") json_path = need("a path");
         else if (a == "--trades") cfg.trade_log = need("a path");
         else if (a == "--cmdlog") cfg.cmd_log = need("a path");

@@ -69,6 +69,39 @@ header-only, so plugins have no host symbols to resolve and the ABI is just
 "same compiler, same headers". This is what lets the generational loop
 (`agents/loop.py --proposer claude-code`) run model-written strategies.
 
+## Broadcast fan-out (`include/multicast_ring.h`)
+
+Two paths, selected with `--fanout`:
+
+* `spsc` (default): the engine pushes each broadcast event into every agent's
+  private queue. Simple, but a publish costs one push and one cache line per
+  agent, so the engine's per-command cost grows with the agent count.
+* `multicast`: one single-writer, multi-reader ring. The engine writes each
+  event once; every agent reads it through its own cursor. Each slot is a
+  seqlock: the writer marks the slot in progress, stores the payload as
+  relaxed atomic words, then stores the publish number with release. A reader
+  loads the sequence with acquire, copies, fences, and re-checks; a mismatch
+  means the writer lapped it. A lapped reader jumps to the oldest intact value
+  and counts what it lost, so a slow agent never slows the engine or the
+  other agents. Private events (fills, acks) still use the agent's SPSC queue.
+
+Measured on an 8-core laptop, 2 s sessions, median of 3 seeds, `match` is the
+engine's per-command cost including publishing:
+
+| agents | fanout    | match p50 | match p99 | delivery p50 | delivery p99 |
+|-------:|-----------|----------:|----------:|-------------:|-------------:|
+|      6 | spsc      |    456 ns |   3776 ns |      2016 ns |     24064 ns |
+|      6 | multicast |    496 ns |   3008 ns |      1456 ns |     26112 ns |
+|     12 | spsc      |    288 ns |   3584 ns |      7104 ns |     22016 ns |
+|     12 | multicast |    328 ns |   2112 ns |      7168 ns |     22528 ns |
+|     24 | spsc      |    208 ns |   4480 ns |     17920 ns |     48128 ns |
+|     24 | multicast |    208 ns |   1696 ns |     16384 ns |     43008 ns |
+
+The median is unchanged because most commands (cancels, non-crossing adds) do
+not broadcast. The tail is where fan-out shows up, and it stops growing with
+the agent count once publishing is a single write. Reproduce with
+`scripts/bench_fanout.py`.
+
 ## Events
 
 Private to one agent: `Ack`, `Fill`, `Cancelled`, `Rejected`.

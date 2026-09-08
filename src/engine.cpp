@@ -64,6 +64,7 @@ struct Engine::Slot {
 struct Engine::Impl {
     OrderBook book;
     Logger logger;
+    std::unique_ptr<AgentContext::EventRing> ring; // only with Fanout::Multicast
     Seq ev_seq = 0;
     uint64_t commands = 0;
     uint64_t trades = 0;
@@ -79,6 +80,7 @@ struct Engine::Impl {
 
     explicit Impl(const EngineConfig& c)
         : book(c.min_px, c.max_px), logger(c.trade_log, c.cmd_log), last_px(c.initial_px) {
+        if (c.fanout == Fanout::Multicast) ring = std::make_unique<AgentContext::EventRing>();
         fills.reserve(256);
         stp.reserve(64);
         batch.reserve(4096);
@@ -113,6 +115,10 @@ void Engine::broadcast(Event ev) {
     ev.seq = ++impl_->ev_seq;
     ev.ts = now_ns();
     ++impl_->events_published;
+    if (impl_->ring) {
+        impl_->ring->publish(ev); // one write, every agent reads it
+        return;
+    }
     for (auto& s : slots_)
         if (!s->out.try_push(ev)) ++s->events_dropped;
 }
@@ -323,7 +329,10 @@ RunReport Engine::run() {
     impl_->logger.start();
 
     const Ts t_start = now_ns();
-    for (auto& s : slots_) s->ctx.begin_session(t_start);
+    for (auto& s : slots_) {
+        s->ctx.begin_session(t_start);
+        s->ctx.attach_ring(impl_->ring.get());
+    }
     std::thread eng([this] { engine_loop(); });
     for (auto& s : slots_) s->thread = std::thread([this, &s] { agent_loop(*s); });
 
@@ -347,6 +356,7 @@ RunReport Engine::build_report(Ts t_start, Ts t_end) {
     RunReport r;
     r.session_seconds = static_cast<double>(t_end - t_start) / 1e9;
     r.seed = cfg_.seed;
+    r.fanout = im.ring ? "multicast" : "spsc";
     r.commands = im.commands;
     r.trades = im.trades;
     r.volume = im.volume;
@@ -379,8 +389,8 @@ RunReport Engine::build_report(Ts t_start, Ts t_end) {
         a.volume = s.volume;
         a.orders_processed = s.orders_processed;
         a.orders_rejected = s.orders_rejected;
-        a.events_dropped = s.events_dropped;
-        r.events_dropped += s.events_dropped;
+        a.events_dropped = s.events_dropped + s.ctx.multicast_dropped();
+        r.events_dropped += a.events_dropped;
         const AgentStats& st = s.ctx.stats();
         a.agent_position = s.ctx.position();
         a.agent_cash = s.ctx.cash();

@@ -40,6 +40,7 @@ struct AgentReport {
 struct RunReport {
     double session_seconds = 0;
     uint64_t seed = 0;
+    std::string fanout;
     uint64_t commands = 0;
     uint64_t trades = 0;
     Qty volume = 0;

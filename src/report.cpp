@@ -61,7 +61,7 @@ void print_report(const RunReport& r, std::ostream& os) {
     os << std::fixed;
     os << "\n=== SESSION ===\n"
        << "  seconds: " << std::setprecision(3) << r.session_seconds
-       << " | seed: " << r.seed
+       << " | seed: " << r.seed << " | fanout: " << r.fanout
        << " | commands: " << r.commands << " (" << std::setprecision(0) << r.commands_per_sec << "/s)"
        << " | trades: " << r.trades << " (" << r.trades_per_sec << "/s)"
        << " | volume: " << r.volume << "\n"
@@ -113,6 +113,7 @@ std::string to_json(const RunReport& r) {
     o << "{\n"
       << "  \"session_seconds\": " << r.session_seconds << ",\n"
       << "  \"seed\": " << r.seed << ",\n"
+      << "  \"fanout\": \"" << r.fanout << "\",\n"
       << "  \"commands\": " << r.commands << ",\n"
       << "  \"trades\": " << r.trades << ",\n"
       << "  \"volume\": " << r.volume << ",\n"

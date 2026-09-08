@@ -19,6 +19,10 @@ See `docs/DESIGN.md` for the architecture.
   trades and top-of-book updates.
 - Included agents: market maker, noise trader, momentum, mean reversion.
   Any number of each, parameterised from the command line.
+- Two broadcast paths, selectable at runtime: per-agent SPSC pushes, or a
+  single-writer multi-reader multicast ring with seqlock slots and lap
+  detection. At 24 agents the ring cuts the engine's p99 per-command cost from
+  4.5 µs to 1.7 µs (`scripts/bench_fanout.py`, table in `docs/DESIGN.md`).
 - Log-bucketed latency histograms, single writer, reported as p50/p90/p99/p99.9.
 - Trade and command logs written by a separate logger thread. The command log
   replays through the pure book (`build/replay`) and reproduces the session's
@@ -38,7 +42,7 @@ Requires a C++17 compiler with pthreads, and Python 3 for the test runner.
 
 ```
 make            # build/market_engine and build/replay
-make test       # 12 tests: book semantics, histogram, queue, engine invariants, plugin load
+make test       # 14 tests: book, histogram, queues, multicast ring, engine invariants, plugin load
 ./build/market_engine --seconds 5
 ```
 
@@ -52,6 +56,9 @@ Options:
 --idle MODE          agent idle policy: spin | yield | sleep (default yield)
 --engine-idle MODE   engine idle policy
 --pin                pin threads to cores (Linux only)
+--fanout MODE        broadcast path: spsc | multicast (default spsc)
+--market k=v,...     defaults applied to every agent, e.g. the shared fundamental's jump=0.01
+--plugin PATH[:k=v]  add an agent from a compiled plugin
 --json PATH          write the report as JSON
 --trades PATH        trade log CSV
 --cmdlog PATH        command log CSV, replayable with build/replay
@@ -123,11 +130,15 @@ a seeded RNG, and a clock. Everything a strategy knows arrives through events.
 ## Layout
 
 ```
-include/   types, order_book, histogram, strategy (interface + AgentContext), engine, report, logger
-src/       order_book, engine, strategies, report, logger, main
+include/   types, order_book, histogram, spsc_queue, multicast_ring, strategy (interface + AgentContext),
+           engine, report, logger, plugin (ABI), plugin_loader
+src/       order_book, engine, strategies, report, logger, plugin_loader, main
+plugins/   example strategy plugin
 tools/     replay.cpp
+scripts/   sweep.py (multi-seed distributions), bench_fanout.py
+agents/    generational loop: catalogue, proposers (Claude and mock), code-writing proposers
 tests/     engine_tests.cpp and the runner
-docs/      DESIGN.md
+docs/      DESIGN.md, EXPERIMENTS.md, architecture.html
 ```
 
 ## Known limits

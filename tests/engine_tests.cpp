@@ -1,11 +1,14 @@
 #include "engine.h"
 #include "histogram.h"
+#include "multicast_ring.h"
 #include "order_book.h"
 #include "spsc_queue.h"
 #include "strategies.h"
 
+#include <atomic>
 #include <cmath>
 #include <iostream>
+#include <thread>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -150,6 +153,68 @@ void spsc_wraparound() {
     }
 }
 
+struct Pair { uint64_t a; uint64_t b; uint64_t pad[8]; }; // 80 bytes, like Event
+
+void multicast_ring() {
+    // Single reader, no lapping: every value, in order.
+    {
+        MulticastRing<Pair, 8> ring;
+        MulticastRing<Pair, 8>::Reader rd;
+        Pair v;
+        CHECK(!ring.try_read(rd, v));
+        for (uint64_t i = 1; i <= 5; ++i) ring.publish(Pair{i, ~i, {}});
+        for (uint64_t i = 1; i <= 5; ++i) CHECK(ring.try_read(rd, v) && v.a == i && v.b == ~i);
+        CHECK(!ring.try_read(rd, v) && rd.dropped == 0);
+    }
+    // Lapping: a reader that never polled while 100 values went through an 8-slot ring
+    // loses the overwritten ones, lands on an intact value, and reads the rest in order.
+    {
+        MulticastRing<Pair, 8> ring;
+        MulticastRing<Pair, 8>::Reader rd;
+        Pair v;
+        for (uint64_t i = 1; i <= 100; ++i) ring.publish(Pair{i, ~i, {}});
+        CHECK(ring.try_read(rd, v));
+        CHECK(v.a == 100 + 2 - 8 && rd.dropped == v.a - 1);
+        uint64_t last = v.a;
+        while (ring.try_read(rd, v)) { CHECK(v.a == last + 1 && v.b == ~v.a); last = v.a; }
+        CHECK(last == 100);
+    }
+    // Concurrent: one writer, three readers of different speeds. Nobody sees a torn value,
+    // every reader's sequence is strictly increasing, and the fast readers lose nothing.
+    {
+        constexpr uint64_t N = 200000;
+        auto ring = std::make_unique<MulticastRing<Pair, 1024>>();
+        std::atomic<bool> done{false};
+        std::atomic<uint64_t> torn{0};
+        uint64_t seen[3] = {0, 0, 0}, dropped[3] = {0, 0, 0};
+        std::thread readers[3];
+        for (int k = 0; k < 3; ++k) readers[k] = std::thread([&, k] {
+            MulticastRing<Pair, 1024>::Reader rd;
+            Pair v;
+            uint64_t last = 0;
+            while (true) {
+                if (ring->try_read(rd, v)) {
+                    if (v.b != ~v.a || v.a <= last) torn.fetch_add(1);
+                    last = v.a;
+                    ++seen[k];
+                    if (k == 2 && (seen[k] % 64) == 0) std::this_thread::sleep_for(std::chrono::microseconds(200));
+                } else if (done.load(std::memory_order_acquire) && ring->published() == N && rd.next > N) {
+                    break;
+                } else if (done.load(std::memory_order_acquire) && !ring->try_read(rd, v)) {
+                    break;
+                }
+            }
+            dropped[k] = rd.dropped;
+        });
+        for (uint64_t i = 1; i <= N; ++i) ring->publish(Pair{i, ~i, {}});
+        done.store(true, std::memory_order_release);
+        for (auto& t : readers) t.join();
+        CHECK(torn.load() == 0);
+        for (int k = 0; k < 3; ++k) CHECK(seen[k] + dropped[k] == N);
+        CHECK(dropped[2] > 0); // the deliberately slow reader was lapped
+    }
+}
+
 // ---------- engine ----------
 EngineConfig short_cfg(double seconds) {
     EngineConfig c;
@@ -158,8 +223,8 @@ EngineConfig short_cfg(double seconds) {
     return c;
 }
 
-void engine_conservation() {
-    Engine e(short_cfg(0.4));
+void conservation_with(EngineConfig cfg) {
+    Engine e(cfg);
     for (const char* n : {"mm", "noise", "noise", "noise", "momentum", "meanrev"}) e.add_agent(make_strategy(n, Params{}));
     const RunReport r = e.run();
     CHECK(r.trades > 0);
@@ -175,6 +240,14 @@ void engine_conservation() {
     CHECK(pos == 0);
     CHECK(processed == r.commands && submitted == r.commands); // nothing lost between agent and engine
     CHECK(r.submit_to_pop.count == r.commands && r.match.count == r.commands);
+}
+
+void engine_conservation() { conservation_with(short_cfg(0.4)); }
+
+void engine_multicast() {
+    EngineConfig cfg = short_cfg(0.4);
+    cfg.fanout = Fanout::Multicast;
+    conservation_with(cfg);
 }
 
 // Submits non-crossing bids as fast as it can; used to prove the drain-on-shutdown contract.
@@ -253,6 +326,8 @@ int main(int argc, char** argv) {
         else if (name == "histogram") histogram();
         else if (name == "spsc_wraparound") spsc_wraparound();
         else if (name == "engine_conservation") engine_conservation();
+        else if (name == "engine_multicast") engine_multicast();
+        else if (name == "multicast_ring") multicast_ring();
         else if (name == "engine_shutdown_drain") engine_shutdown_drain();
         else if (name == "engine_matching_pair") engine_matching_pair();
         else if (name == "agent_spec") agent_spec();
