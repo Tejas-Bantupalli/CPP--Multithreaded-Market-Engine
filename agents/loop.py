@@ -1,21 +1,22 @@
 #!/usr/bin/env python3
-"""Generational strategy loop: agents propose, the engine evaluates, agents see results, repeat.
+"""Generational strategy loop: agents adapt, the engine evaluates, agents see results, repeat.
 
-    agents/loop.py --generations 6 --seeds 8 --seconds 2 \
-        --subject alpha:trend --subject beta:cautious --info rivals --proposer claude \
+    agents/loop.py --generations 10 --seeds 8 --seconds 2 \
+        --subject solo --subject copycat --info rivals --rule imitate \
         --out results/loop-1
 
-Each --subject is name[:persona]. All subjects trade in the same market at the same
-time, alongside a fixed background (--background). What each subject is told
-about the last generation is controlled by --info:
+Each --subject is a name (name:persona only matters for the llm rules). All
+subjects trade in the same market at the same time, alongside a fixed background
+(--background). What each subject is told about the last generation is
+controlled by --info:
 
   own      its own PnL distribution, fills, and volume
   market   plus market-wide statistics: trades, price path, engine throughput
   rivals   plus every other agent's strategy, parameters, and PnL distribution
 
---proposer selects the action space: claude and mock pick catalogue parameters;
-claude-code and mock-code write a C++ strategy that is compiled into a plugin
-(generated sources and libraries land in <out>/code).
+--rule selects how a subject adapts. hillclimb, imitate, and bandit are
+algorithmic and need nothing installed (see agents/adapt.py). llm and llm-code
+ask a model and need credentials; they are off unless asked for.
 
 Output per run directory: gen_<k>.json (proposals + sweep summary), trajectory.jsonl
 (one line per subject per generation), and config.json.
@@ -33,8 +34,7 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from catalogue import to_spec  # noqa: E402
-from proposer import ClaudeProposer, MockProposer  # noqa: E402
-from codegen import ClaudeCodeProposer, MockCodeProposer  # noqa: E402
+from adapt import RULES  # noqa: E402
 import sweep  # noqa: E402
 
 DEFAULT_BACKGROUND = ["mm", "noise", "noise", "noise"]
@@ -82,16 +82,55 @@ def build_report(info, subject_idx, summary, runs, specs):
     return report
 
 
+SUBJECT_KEYS = {"info", "rule", "start", "sigma", "persona"}
+
+
+def parse_subject(spec, defaults):
+    """name[:k=v,...] with keys info, rule, start, sigma, persona. Unset keys take the run defaults."""
+    name, _, rest = spec.partition(":")
+    sub = dict(defaults, name=name)
+    for item in filter(None, rest.split(",")):
+        k, _, v = item.partition("=")
+        if k not in SUBJECT_KEYS:
+            raise SystemExit(f"subject {name}: unknown key {k} (allowed: {sorted(SUBJECT_KEYS)})")
+        sub[k] = float(v) if k == "sigma" else v
+    if sub["info"] not in ("own", "market", "rivals"):
+        raise SystemExit(f"subject {name}: bad info {sub['info']}")
+    if sub["rule"] not in list(RULES) + ["llm", "llm-code", "mock-code"]:
+        raise SystemExit(f"subject {name}: bad rule {sub['rule']}")
+    return sub
+
+
+def make_proposer(i, sub, args, code_dir):
+    if sub["rule"] in RULES:
+        return RULES[sub["rule"]](seed=i, start_strategy=sub["start"], sigma=sub["sigma"])
+    if sub["rule"] == "mock-code":
+        from codegen import MockCodeProposer
+        return MockCodeProposer(code_dir, seed=i, binary=args.binary)
+    if sub["rule"] == "llm":
+        from proposer import ClaudeProposer
+        return ClaudeProposer(model=args.model, persona=sub["persona"], effort=args.effort)
+    from codegen import ClaudeCodeProposer
+    return ClaudeCodeProposer(code_dir, model=args.model, persona=sub["persona"], effort=args.effort, binary=args.binary)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--generations", type=int, default=5)
     ap.add_argument("--seeds", type=int, default=8, help="seeds per evaluation")
     ap.add_argument("--seconds", type=float, default=2.0)
-    ap.add_argument("--subject", action="append", default=[], help="name[:persona], repeatable")
+    ap.add_argument("--subject", action="append", default=[],
+                    help="name[:info=..,rule=..,start=..,sigma=..]; repeatable. Unset keys use the flags below")
     ap.add_argument("--background", default=",".join(DEFAULT_BACKGROUND), help="comma-separated fixed agent specs")
-    ap.add_argument("--info", choices=["own", "market", "rivals"], default="own")
-    ap.add_argument("--proposer", choices=["claude", "mock", "claude-code", "mock-code"], default="claude",
-                    help="claude/mock choose catalogue parameters; claude-code/mock-code write C++ plugins")
+    ap.add_argument("--info", choices=["own", "market", "rivals"], default="own", help="default context level")
+    ap.add_argument("--rule", choices=list(RULES) + ["llm", "llm-code", "mock-code"], default="hillclimb",
+                    help="default adaptation rule. hillclimb/imitate/bandit are algorithmic; "
+                         "llm/llm-code ask a model and need credentials; mock-code tests the plugin pipeline")
+    ap.add_argument("--sigma", type=float, default=0.3, help="default mutation size (log-normal)")
+    ap.add_argument("--start", default="momentum,meanrev,mm",
+                    help="comma list of default starting strategies, assigned to subjects in order")
+    ap.add_argument("--fixed-seeds", action="store_true",
+                    help="evaluate every generation on the same seeds (less noise, more overfitting)")
     ap.add_argument("--model", default="claude-opus-5")
     ap.add_argument("--effort", default="high")
     ap.add_argument("--parallel", type=int, default=2)
@@ -99,65 +138,64 @@ def main():
     ap.add_argument("--binary", default=str(sweep.DEFAULT_BINARY))
     args = ap.parse_args()
 
+    starts = [x for x in args.start.split(",") if x]
     subjects = []
-    for i, s in enumerate(args.subject or ["agent"]):
-        name, _, persona = s.partition(":")
-        subjects.append((name, persona or "neutral"))
+    for i, spec in enumerate(args.subject or ["agent"]):
+        defaults = {"info": args.info, "rule": args.rule, "start": starts[i % len(starts)],
+                    "sigma": args.sigma, "persona": "neutral"}
+        subjects.append(parse_subject(spec, defaults))
+    names = [s["name"] for s in subjects]
+    if len(set(names)) != len(names):
+        raise SystemExit("subject names must be unique")
     background = [b for b in args.background.split(",") if b]
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    (out / "config.json").write_text(json.dumps(vars(args), indent=1))
+    (out / "config.json").write_text(json.dumps({**vars(args), "subjects": subjects, "background": background}, indent=1))
 
-    proposers = {}
     code_dir = out / "code"
-    for i, (name, persona) in enumerate(subjects):
-        if args.proposer == "mock":
-            proposers[name] = MockProposer(seed=i, start_strategy=["momentum", "meanrev", "mm"][i % 3])
-        elif args.proposer == "claude":
-            proposers[name] = ClaudeProposer(model=args.model, persona=persona, effort=args.effort)
-        elif args.proposer == "mock-code":
-            proposers[name] = MockCodeProposer(code_dir, seed=i, binary=args.binary)
-        else:
-            proposers[name] = ClaudeCodeProposer(code_dir, model=args.model, persona=persona,
-                                                 effort=args.effort, binary=args.binary)
-
-    history = {name: [] for name, _ in subjects}
+    proposers = {s["name"]: make_proposer(i, s, args, code_dir) for i, s in enumerate(subjects)}
+    history = {s["name"]: [] for s in subjects}
     last_summary, last_runs, last_specs = None, None, None
     n_bg = len(background)
 
     for gen in range(args.generations):
         t0 = time.time()
         proposals = {}
-        for i, (name, persona) in enumerate(subjects):
+        for i, sub in enumerate(subjects):
+            name = sub["name"]
             idx = n_bg + i
-            report = build_report(args.info, idx, last_summary, last_runs, last_specs) if last_summary else None
+            report = build_report(sub["info"], idx, last_summary, last_runs, last_specs) if last_summary else None
             proposal, warnings = proposers[name].propose(name, history[name], report)
             proposals[name] = proposal
             for w in warnings:
                 print(f"  [{name}] warning: {w}")
-            print(f"gen {gen} {name:<10} -> {spec_of(proposal)}")
+            print(f"gen {gen} {name:<10} [{sub['rule']}/{sub['info']}] -> {spec_of(proposal)}")
             print(f"      {proposal.rationale[:300]}")
 
-        specs = background + [spec_of(proposals[n]) for n, _ in subjects]
-        seeds = list(range(gen * 1000 + 1, gen * 1000 + 1 + args.seeds))
+        specs = background + [spec_of(proposals[s["name"]]) for s in subjects]
+        base = 1 if args.fixed_seeds else gen * 1000 + 1
+        seeds = list(range(base, base + args.seeds))
         from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=max(1, args.parallel)) as pool:
             runs = list(pool.map(lambda s: sweep.run_one(args.binary, s, args.seconds, specs), seeds))
         summary = sweep.summarise(runs)
 
         gen_record = {"generation": gen, "specs": specs, "seeds": seeds, "proposals": {}, "summary": summary}
-        for i, (name, _) in enumerate(subjects):
+        for i, sub in enumerate(subjects):
+            name = sub["name"]
             row = summary["agents"][n_bg + i]
             entry = {
                 "proposal": dict(proposals[name]),
                 "score": row["pnl"]["mean"], "std": row["pnl"]["std"], "hit_rate": row["pnl"]["hit_rate"],
-                "fills": row["fills_mean"],
+                "median": row["pnl"]["median"], "min": row["pnl"]["min"], "max": row["pnl"]["max"],
+                "fills": row["fills_mean"], "volume": row["volume_mean"],
             }
             history[name].append(entry)
             gen_record["proposals"][name] = entry
             with open(out / "trajectory.jsonl", "a") as f:
-                f.write(json.dumps({"generation": gen, "subject": name, "info": args.info, **entry}) + "\n")
+                f.write(json.dumps({"generation": gen, "subject": name, "info": sub["info"], "rule": sub["rule"],
+                                    "start": sub["start"], **entry}) + "\n")
         (out / f"gen_{gen}.json").write_text(json.dumps({**gen_record, "runs": runs}, indent=1))
 
         sweep.print_summary(summary, specs)
@@ -165,8 +203,10 @@ def main():
         last_summary, last_runs, last_specs = summary, runs, specs
 
     print("trajectory:")
-    for name, _ in subjects:
-        print(f"  {name}: " + " -> ".join(f"{h['score']:.1f}" for h in history[name]))
+    for sub in subjects:
+        print(f"  {sub['name']:<10} [{sub['rule']}/{sub['info']}]: "
+              + " -> ".join(f"{h['score']:.1f}" for h in history[sub["name"]]))
+    print(f"analyse with: scripts/trajectory.py {out}")
 
 
 if __name__ == "__main__":

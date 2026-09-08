@@ -99,6 +99,19 @@ def to_spec(name, params):
     return name + ":" + ",".join(f"{k}={fmt(v)}" for k, v in sorted(params.items()))
 
 
+def parse_spec(spec):
+    """Inverse of to_spec: "name:k=v,k=v" -> (name, {k: float})."""
+    name, _, rest = spec.partition(":")
+    params = {}
+    for item in filter(None, rest.split(",")):
+        k, _, v = item.partition("=")
+        try:
+            params[k] = float(v)
+        except ValueError:
+            pass
+    return name, params
+
+
 def catalogue_text():
     lines = []
     for name, entry in CATALOGUE.items():

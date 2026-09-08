@@ -31,9 +31,10 @@ See `docs/DESIGN.md` for the architecture.
 - Strategies as compiled plugins (`make plugin SRC=...`, `--plugin path.so`),
   which is how model-written strategies get in.
 - `scripts/sweep.py` runs a configuration over many seeds and reports PnL
-  distributions. `agents/loop.py` runs the generational experiment where
-  agents (Claude, or a mock control) propose parameters or write C++
-  strategies, get evaluated, see the results, and try again. See
+  distributions. `agents/loop.py` runs the generational experiment: agents
+  adapt their strategy between generations by a rule (hill climbing,
+  imitation of rivals, or a bandit over strategy classes) from whatever
+  information they are given about the last generation. See
   `docs/EXPERIMENTS.md`.
 
 ## Build and run
@@ -136,7 +137,7 @@ src/       order_book, engine, strategies, report, logger, plugin_loader, main
 plugins/   example strategy plugin
 tools/     replay.cpp
 scripts/   sweep.py (multi-seed distributions), bench_fanout.py
-agents/    generational loop: catalogue, proposers (Claude and mock), code-writing proposers
+agents/    generational loop: catalogue, adaptation rules (adapt.py), optional model-driven proposers
 tests/     engine_tests.cpp and the runner
 docs/      DESIGN.md, EXPERIMENTS.md, architecture.html
 ```
