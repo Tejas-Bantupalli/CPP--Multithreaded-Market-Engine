@@ -1,0 +1,265 @@
+#include "engine.h"
+#include "histogram.h"
+#include "order_book.h"
+#include "spsc_queue.h"
+#include "strategies.h"
+
+#include <cmath>
+#include <iostream>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+#define CHECK(x) do { if (!(x)) throw std::runtime_error(std::string(#x) + " (line " + std::to_string(__LINE__) + ")"); } while (false)
+
+namespace {
+
+Command make(AgentId agent, OrderId id, Side side, Price px, Qty qty, TimeInForce tif = TimeInForce::GTC) {
+    Command c;
+    c.kind = CmdKind::New; c.agent = agent; c.id = id; c.side = side; c.px = px; c.qty = qty; c.tif = tif;
+    c.t_submit = now_ns();
+    return c;
+}
+
+struct Scratch {
+    std::vector<Fill> fills;
+    std::vector<CancelInfo> stp;
+    AddResult add(OrderBook& b, const Command& c) { fills.clear(); stp.clear(); return b.add(c, fills, stp); }
+};
+
+// ---------- order book ----------
+void book_price_time() {
+    OrderBook b(1, 1000);
+    Scratch s;
+    CHECK(s.add(b, make(1, 1, Side::Buy, 100, 1)).resting == 1);
+    CHECK(s.add(b, make(2, 2, Side::Buy, 101, 1)).resting == 1);
+    CHECK(s.add(b, make(3, 3, Side::Buy, 100, 1)).resting == 1);
+    CHECK(b.best_bid() == 101 && b.best_bid_qty() == 1 && b.level_qty(Side::Buy, 100) == 2);
+    const AddResult r = s.add(b, make(9, 9, Side::Sell, 100, 3));
+    CHECK(r.accepted && r.filled == 3 && r.resting == 0);
+    CHECK(s.fills.size() == 3);
+    CHECK(s.fills[0].maker_id == 2 && s.fills[0].px == 101); // best price first
+    CHECK(s.fills[1].maker_id == 1 && s.fills[1].px == 100); // then FIFO within level
+    CHECK(s.fills[2].maker_id == 3 && s.fills[2].px == 100);
+    CHECK(s.fills[0].taker_side == Side::Sell && s.fills[0].taker == 9);
+    CHECK(!b.has_bid() && !b.has_ask() && b.open_orders() == 0);
+}
+
+void book_partial_and_ioc() {
+    OrderBook b(1, 1000);
+    Scratch s;
+    CHECK(s.add(b, make(1, 1, Side::Sell, 100, 5)).resting == 5);
+    AddResult r = s.add(b, make(2, 2, Side::Buy, 100, 8, TimeInForce::IOC));
+    CHECK(r.accepted && r.filled == 5 && r.resting == 0);
+    CHECK(s.fills.size() == 1 && s.fills[0].qty == 5 && s.fills[0].maker_remaining == 0);
+    CHECK(b.open_orders() == 0 && !b.has_ask());
+    r = s.add(b, make(2, 3, Side::Buy, 100, 8));
+    CHECK(r.accepted && r.filled == 0 && r.resting == 8);
+    CHECK(b.best_bid() == 100 && b.best_bid_qty() == 8);
+    // partial fill of a resting order keeps the remainder at the front
+    r = s.add(b, make(3, 4, Side::Sell, 99, 3));
+    CHECK(r.filled == 3 && s.fills[0].px == 100 && s.fills[0].maker_remaining == 5);
+    CHECK(b.best_bid_qty() == 5 && b.contains(3));
+}
+
+void book_walk_levels() {
+    OrderBook b(1, 1000);
+    Scratch s;
+    s.add(b, make(1, 1, Side::Sell, 100, 3));
+    s.add(b, make(1, 2, Side::Sell, 101, 3));
+    s.add(b, make(1, 3, Side::Sell, 102, 3));
+    CHECK(b.best_ask() == 100);
+    const AddResult r = s.add(b, make(2, 4, Side::Buy, 105, 10));
+    CHECK(r.filled == 9 && r.resting == 1);
+    CHECK(s.fills.size() == 3 && s.fills[0].px == 100 && s.fills[1].px == 101 && s.fills[2].px == 102);
+    CHECK(!b.has_ask() && b.best_bid() == 105 && b.best_bid_qty() == 1);
+}
+
+void book_cancel() {
+    OrderBook b(1, 1000);
+    Scratch s;
+    s.add(b, make(1, 1, Side::Buy, 100, 4));
+    s.add(b, make(1, 2, Side::Buy, 98, 2));
+    s.add(b, make(2, 3, Side::Buy, 99, 2));
+    CancelInfo ci; RejectReason why;
+    CHECK(!b.cancel(1, 2, ci, why) && why == RejectReason::NotOwner);
+    CHECK(b.cancel(1, 1, ci, why) && ci.remaining == 4);
+    CHECK(b.best_bid() == 99); // best advanced across an empty level
+    CHECK(!b.cancel(1, 1, ci, why) && why == RejectReason::UnknownOrder);
+    CHECK(b.cancel(3, 2, ci, why) && b.best_bid() == 98);
+    CHECK(b.cancel(2, 1, ci, why) && !b.has_bid() && b.open_orders() == 0);
+    // pool reuse after frees
+    for (OrderId id = 10; id < 10 + 5000; ++id) s.add(b, make(1, id, Side::Sell, 200 + (id % 50), 1));
+    CHECK(b.open_orders() == 5000);
+    for (OrderId id = 10; id < 10 + 5000; ++id) CHECK(b.cancel(id, 1, ci, why));
+    CHECK(b.open_orders() == 0 && !b.has_ask());
+}
+
+void book_self_trade_prevention() {
+    OrderBook b(1, 1000);
+    Scratch s;
+    s.add(b, make(1, 1, Side::Sell, 100, 5));
+    s.add(b, make(2, 2, Side::Sell, 100, 5));
+    const AddResult r = s.add(b, make(1, 3, Side::Buy, 100, 7));
+    CHECK(r.accepted && r.filled == 5 && r.resting == 2);
+    CHECK(s.stp.size() == 1 && s.stp[0].id == 1 && s.stp[0].remaining == 5);
+    CHECK(s.fills.size() == 1 && s.fills[0].maker == 2);
+    CHECK(!b.has_ask() && b.best_bid() == 100 && b.best_bid_qty() == 2);
+}
+
+void book_rejects() {
+    OrderBook b(10, 20);
+    Scratch s;
+    CHECK(s.add(b, make(1, 1, Side::Buy, 15, 0)).reason == RejectReason::BadQty);
+    CHECK(s.add(b, make(1, 1, Side::Buy, 9, 1)).reason == RejectReason::OutOfBand);
+    CHECK(s.add(b, make(1, 1, Side::Buy, 20, 1)).reason == RejectReason::OutOfBand);
+    CHECK(s.add(b, make(1, 1, Side::Buy, 19, 1)).accepted);
+    CHECK(s.add(b, make(1, 1, Side::Buy, 18, 1)).reason == RejectReason::DuplicateId);
+    CHECK(b.open_orders() == 1);
+    const uint64_t c1 = b.checksum();
+    s.add(b, make(2, 2, Side::Sell, 19, 1));
+    CHECK(b.open_orders() == 0 && b.checksum() == 0 && c1 != 0);
+}
+
+// ---------- histogram / queue ----------
+void histogram() {
+    Histogram h;
+    for (int i = 1; i <= 100000; ++i) h.record(i);
+    CHECK(h.count() == 100000 && h.max() == 100000 && h.min() == 1);
+    const double p50 = static_cast<double>(h.percentile(0.5));
+    CHECK(std::fabs(p50 - 50000) / 50000 < 0.05);
+    const double p99 = static_cast<double>(h.percentile(0.99));
+    CHECK(std::fabs(p99 - 99000) / 99000 < 0.05);
+    CHECK(h.percentile(1.0) <= 100000);
+    Histogram e;
+    CHECK(e.percentile(0.5) == 0 && e.max() == 0);
+    for (uint64_t v : {0ull, 1ull, 31ull, 32ull, 33ull, 1000ull, (1ull << 40) + 12345ull}) {
+        const int idx = Histogram::index_of(v);
+        CHECK(Histogram::lower_bound_of(idx) <= v);
+        CHECK(idx + 1 >= Histogram::BUCKETS || Histogram::lower_bound_of(idx + 1) > v);
+    }
+}
+
+void spsc_wraparound() {
+    SPSCQueue<int, 4> q;
+    int value;
+    for (int round = 0; round < 1000; ++round) {
+        CHECK(!q.try_pop(value));
+        CHECK(q.try_push(1) && q.try_push(2) && q.try_push(3) && !q.try_push(4));
+        for (int expected = 1; expected <= 3; ++expected) CHECK(q.try_pop(value) && value == expected);
+    }
+}
+
+// ---------- engine ----------
+EngineConfig short_cfg(double seconds) {
+    EngineConfig c;
+    c.session_seconds = seconds;
+    c.seed = 7;
+    return c;
+}
+
+void engine_conservation() {
+    Engine e(short_cfg(0.4));
+    for (const char* n : {"mm", "noise", "noise", "noise", "momentum", "meanrev"}) e.add_agent(make_strategy(n, Params{}));
+    const RunReport r = e.run();
+    CHECK(r.trades > 0);
+    double cash = 0; long long pos = 0; uint64_t processed = 0, submitted = 0;
+    for (const AgentReport& a : r.agents) {
+        cash += a.cash; pos += a.position; processed += a.orders_processed; submitted += a.submitted;
+        if (a.events_dropped == 0) {
+            CHECK(a.agent_position == a.position);
+            CHECK(std::fabs(a.agent_cash - a.cash) < 1e-6);
+        }
+    }
+    CHECK(std::fabs(cash - INITIAL_CASH * r.agents.size()) < 1e-6);
+    CHECK(pos == 0);
+    CHECK(processed == r.commands && submitted == r.commands); // nothing lost between agent and engine
+    CHECK(r.submit_to_pop.count == r.commands && r.match.count == r.commands);
+}
+
+// Submits non-crossing bids as fast as it can; used to prove the drain-on-shutdown contract.
+struct Flood : Strategy {
+    const char* name() const override { return "flood"; }
+    void on_idle(AgentContext& ctx) override { ctx.submit(Side::Buy, 50, 1); }
+    void on_event(const Event&, AgentContext&) override {}
+};
+
+void engine_shutdown_drain() {
+    Engine e(short_cfg(0.2));
+    for (int i = 0; i < 3; ++i) e.add_agent(std::make_unique<Flood>());
+    const RunReport r = e.run();
+    uint64_t submitted = 0;
+    for (const AgentReport& a : r.agents) { submitted += a.submitted; CHECK(a.orders_rejected == 0); }
+    CHECK(submitted > 1000);
+    CHECK(r.commands == submitted);
+    CHECK(r.open_orders == submitted && r.trades == 0);
+    CHECK(r.final_bid == 50 && r.final_bid_qty == static_cast<Qty>(submitted));
+}
+
+// Seller rests asks; buyer lifts them one at a time as it sees them.
+struct Seller : Strategy {
+    const char* name() const override { return "seller"; }
+    void on_start(AgentContext& ctx) override { for (int i = 0; i < 20; ++i) ctx.submit(Side::Sell, 10000 + i, 1); }
+    void on_event(const Event&, AgentContext&) override {}
+};
+struct Buyer : Strategy {
+    int bought = 0;
+    const char* name() const override { return "buyer"; }
+    void on_event(const Event& ev, AgentContext& ctx) override {
+        if (ev.kind == EventKind::Fill) ++bought;
+        if ((ev.kind == EventKind::BookUpdate || ev.kind == EventKind::Trade) && ctx.has_ask() && ctx.position() < 20)
+            ctx.submit(Side::Buy, ctx.ask_px(), 1, TimeInForce::IOC);
+    }
+};
+
+void engine_matching_pair() {
+    Engine e(short_cfg(0.3));
+    e.add_agent(std::make_unique<Seller>());
+    e.add_agent(std::make_unique<Buyer>());
+    const RunReport r = e.run();
+    CHECK(r.trades == 20 && r.volume == 20);
+    CHECK(r.agents[0].position == -20 && r.agents[1].position == 20);
+    CHECK(r.agents[0].agent_position == -20 && r.agents[1].agent_position == 20);
+    CHECK(r.open_orders == 0 && r.last_px == 10019);
+    double expected = 0; for (int i = 0; i < 20; ++i) expected += to_dollars(10000 + i);
+    CHECK(std::fabs((r.agents[0].cash - INITIAL_CASH) - expected) < 1e-6);
+    CHECK(std::fabs((INITIAL_CASH - r.agents[1].cash) - expected) < 1e-6);
+    CHECK(r.agents[1].react.count >= 20 && r.agents[1].fills == 20 && r.agents[1].delivery.count > 0);
+}
+
+void agent_spec() {
+    std::string name; Params p;
+    CHECK(parse_agent_spec("mm", name, p) && name == "mm" && p.kv.empty());
+    CHECK(parse_agent_spec("noise:sigma=1.5,size=4", name, p) && name == "noise");
+    CHECK(p.get("sigma", 0) == 1.5 && p.get("size", 0) == 4 && p.get("missing", 9) == 9);
+    CHECK(!parse_agent_spec(":x=1", name, p));
+    CHECK(!parse_agent_spec("mm:novalue", name, p));
+    CHECK(make_strategy("nope", p) == nullptr);
+    for (const char* n : {"mm", "noise", "momentum", "meanrev"}) CHECK(make_strategy(n, p) != nullptr);
+}
+
+} // namespace
+
+int main(int argc, char** argv) {
+    try {
+        CHECK(argc == 2);
+        const std::string name = argv[1];
+        if (name == "book_price_time") book_price_time();
+        else if (name == "book_partial_and_ioc") book_partial_and_ioc();
+        else if (name == "book_walk_levels") book_walk_levels();
+        else if (name == "book_cancel") book_cancel();
+        else if (name == "book_self_trade_prevention") book_self_trade_prevention();
+        else if (name == "book_rejects") book_rejects();
+        else if (name == "histogram") histogram();
+        else if (name == "spsc_wraparound") spsc_wraparound();
+        else if (name == "engine_conservation") engine_conservation();
+        else if (name == "engine_shutdown_drain") engine_shutdown_drain();
+        else if (name == "engine_matching_pair") engine_matching_pair();
+        else if (name == "agent_spec") agent_spec();
+        else throw std::runtime_error("unknown test");
+        std::cout << "PASS " << name << '\n';
+    } catch (const std::exception& e) {
+        std::cerr << "FAIL " << (argc == 2 ? argv[1] : "?") << ": " << e.what() << '\n';
+        return 1;
+    }
+}
