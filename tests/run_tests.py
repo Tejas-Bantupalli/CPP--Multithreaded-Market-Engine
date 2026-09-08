@@ -25,7 +25,20 @@ for case in CASES:
         subprocess.run([binary, case], check=True, timeout=60)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         failed.append(f"{case}: {exc}")
+# Plugin smoke test: the example plugin loads, trades, and the engine exits cleanly.
+build = Path(binary).parent
+engine = build / "market_engine"
+plugin = build / "plugins" / "example_breakout.so"
+if engine.exists() and plugin.exists():
+    try:
+        subprocess.run([str(engine), "--seconds", "0.3", "--quiet", "--agent", "mm", "--agent", "noise",
+                        "--plugin", f"{plugin}:window=50,size=2"], check=True, timeout=30)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        failed.append(f"plugin_smoke: {exc}")
+else:
+    failed.append("plugin_smoke: build/market_engine or build/plugins/example_breakout.so missing")
+
 if failed:
     print("FAILED:\n  " + "\n  ".join(failed))
     sys.exit(1)
-print(f"all {len(CASES)} tests passed")
+print(f"all {len(CASES)} tests + plugin smoke test passed")

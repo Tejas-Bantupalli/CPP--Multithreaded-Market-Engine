@@ -7,17 +7,6 @@
 #include <sstream>
 
 // ===================== Params / spec parsing =====================
-double Params::get(const std::string& key, double def) const {
-    auto it = kv.find(key);
-    if (it == kv.end()) return def;
-    try { return std::stod(it->second); } catch (...) { return def; }
-}
-
-std::string Params::str(const std::string& key, const std::string& def) const {
-    auto it = kv.find(key);
-    return it == kv.end() ? def : it->second;
-}
-
 bool parse_agent_spec(const std::string& spec, std::string& name, Params& params) {
     params.kv.clear();
     const size_t colon = spec.find(':');

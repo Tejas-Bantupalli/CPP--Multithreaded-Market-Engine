@@ -1,4 +1,5 @@
 #include "engine.h"
+#include "plugin_loader.h"
 #include "strategies.h"
 
 #include <cstdlib>
@@ -15,6 +16,7 @@ void usage() {
         "  --seconds S        session length (default 5)\n"
         "  --seed N           base seed for agent RNGs (default 1)\n"
         "  --agent SPEC       add an agent; repeatable. SPEC = name[:k=v,k=v]\n"
+        "  --plugin PATH[:k=v] add an agent from a compiled plugin (see include/plugin.h); repeatable\n"
         "  --px P             initial price in dollars (default 100.00)\n"
         "  --idle MODE        agent idle policy: spin | yield | sleep (default yield)\n"
         "  --engine-idle MODE engine idle policy (default yield)\n"
@@ -40,7 +42,8 @@ bool parse_idle(const std::string& s, IdlePolicy& out) {
 
 int main(int argc, char** argv) {
     EngineConfig cfg;
-    std::vector<std::string> specs;
+    struct AgentSpec { bool plugin; std::string spec; };
+    std::vector<AgentSpec> specs;
     std::string json_path;
     std::string market_spec;
     bool quiet = false;
@@ -54,7 +57,8 @@ int main(int argc, char** argv) {
         if (a == "--help" || a == "-h") { usage(); return 0; }
         else if (a == "--seconds") cfg.session_seconds = std::stod(need("seconds"));
         else if (a == "--seed") cfg.seed = std::stoull(need("a seed"));
-        else if (a == "--agent") specs.push_back(need("a spec"));
+        else if (a == "--agent") specs.push_back({false, need("a spec")});
+        else if (a == "--plugin") specs.push_back({true, need("a path[:k=v]")});
         else if (a == "--px") cfg.initial_px = to_ticks(std::stod(need("a price")));
         else if (a == "--idle") { if (!parse_idle(need("a mode"), cfg.agent_idle)) { std::cerr << "bad idle mode\n"; return 2; } }
         else if (a == "--engine-idle") { if (!parse_idle(need("a mode"), cfg.engine_idle)) { std::cerr << "bad idle mode\n"; return 2; } }
@@ -67,7 +71,8 @@ int main(int argc, char** argv) {
         else { std::cerr << "unknown option " << a << "\n"; usage(); return 2; }
     }
 
-    if (specs.empty()) specs = {"mm", "noise", "noise", "noise", "momentum", "meanrev"};
+    if (specs.empty())
+        for (const char* d : {"mm", "noise", "noise", "noise", "momentum", "meanrev"}) specs.push_back({false, d});
 
     // --market parameters are defaults for every agent; an agent's own spec overrides them.
     Params market;
@@ -77,13 +82,20 @@ int main(int argc, char** argv) {
     }
 
     Engine engine(cfg);
-    for (const std::string& spec : specs) {
+    for (const AgentSpec& as : specs) {
         std::string name;
         Params params;
-        if (!parse_agent_spec(spec, name, params)) { std::cerr << "bad agent spec: " << spec << "\n"; return 2; }
+        if (!parse_agent_spec(as.spec, name, params)) { std::cerr << "bad agent spec: " << as.spec << "\n"; return 2; }
         for (const auto& kv : market.kv) params.kv.emplace(kv.first, kv.second);
-        auto s = make_strategy(name, params);
-        if (!s) { std::cerr << "unknown strategy: " << name << "\n"; return 2; }
+        std::unique_ptr<Strategy> s;
+        if (as.plugin) {
+            std::string err;
+            s = load_plugin(name, params, err);
+            if (!s) { std::cerr << "plugin " << name << ": " << err << "\n"; return 2; }
+        } else {
+            s = make_strategy(name, params);
+            if (!s) { std::cerr << "unknown strategy: " << name << "\n"; return 2; }
+        }
         engine.add_agent(std::move(s));
     }
 

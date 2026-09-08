@@ -24,6 +24,13 @@ See `docs/DESIGN.md` for the architecture.
   replays through the pure book (`build/replay`) and reproduces the session's
   trade count and book checksum.
 - JSON report for scripting many sessions.
+- Strategies as compiled plugins (`make plugin SRC=...`, `--plugin path.so`),
+  which is how model-written strategies get in.
+- `scripts/sweep.py` runs a configuration over many seeds and reports PnL
+  distributions. `agents/loop.py` runs the generational experiment where
+  agents (Claude, or a mock control) propose parameters or write C++
+  strategies, get evaluated, see the results, and try again. See
+  `docs/EXPERIMENTS.md`.
 
 ## Build and run
 
@@ -31,7 +38,7 @@ Requires a C++17 compiler with pthreads, and Python 3 for the test runner.
 
 ```
 make            # build/market_engine and build/replay
-make test       # 12 tests: book semantics, histogram, queue, engine invariants
+make test       # 12 tests: book semantics, histogram, queue, engine invariants, plugin load
 ./build/market_engine --seconds 5
 ```
 
@@ -107,7 +114,9 @@ class MyStrategy : public Strategy {
 };
 ```
 
-Register it in `make_strategy` in `src/strategies.cpp`. `AgentContext` gives
+Register it in `make_strategy` in `src/strategies.cpp`, or keep it out of tree:
+end the file with `MARKET_PLUGIN(MyStrategy)`, build with
+`make plugin SRC=plugins/my_strategy.cpp`, and run with `--plugin build/plugins/my_strategy.so`. `AgentContext` gives
 you `submit`, `cancel`, `position`, `cash`, the last top of book, `fair()`,
 a seeded RNG, and a clock. Everything a strategy knows arrives through events.
 

@@ -24,17 +24,23 @@ ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_BINARY = ROOT / "build" / "market_engine"
 
 
-def run_one(binary, seed, seconds, agents, plugins, market, extra):
+PLUGIN_PREFIX = "plugin:"
+
+
+def run_one(binary, seed, seconds, specs, market="", extra=()):
+    """Run one session. A spec starting with "plugin:" is passed as --plugin, else --agent.
+    Order is preserved, so agent ids follow the order of `specs`."""
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
         out = tmp.name
     cmd = [str(binary), "--seconds", str(seconds), "--seed", str(seed), "--json", out, "--quiet"]
-    for a in agents:
-        cmd += ["--agent", a]
-    for p in plugins:
-        cmd += ["--plugin", p]
+    for s in specs:
+        if s.startswith(PLUGIN_PREFIX):
+            cmd += ["--plugin", s[len(PLUGIN_PREFIX):]]
+        else:
+            cmd += ["--agent", s]
     if market:
         cmd += ["--market", market]
-    cmd += extra
+    cmd += list(extra)
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=seconds + 60)
         if proc.returncode != 0:
@@ -116,14 +122,23 @@ def print_summary(summary, agents_spec):
         print("agents: " + "  ".join(f"{i}={s}" for i, s in enumerate(agents_spec)))
 
 
+class SpecAction(argparse.Action):
+    """Keeps --agent and --plugin in one ordered list."""
+    def __call__(self, parser, ns, values, option_string=None):
+        lst = list(getattr(ns, self.dest) or [])
+        lst.append((PLUGIN_PREFIX if option_string == "--plugin" else "") + values)
+        setattr(ns, self.dest, lst)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--binary", default=str(DEFAULT_BINARY))
     ap.add_argument("--seeds", type=int, default=10, help="number of seeds (runs)")
     ap.add_argument("--seed0", type=int, default=1, help="first seed")
     ap.add_argument("--seconds", type=float, default=2.0)
-    ap.add_argument("--agent", action="append", default=[], help="agent spec, repeatable")
-    ap.add_argument("--plugin", action="append", default=[], help="plugin spec, repeatable")
+    ap.add_argument("--agent", action=SpecAction, dest="specs", default=[], help="agent spec, repeatable")
+    ap.add_argument("--plugin", action=SpecAction, dest="specs", default=[],
+                    help="plugin spec path[:k=v], repeatable; order relative to --agent is kept")
     ap.add_argument("--market", default="", help="--market k=v,... passed through")
     ap.add_argument("--parallel", type=int, default=1)
     ap.add_argument("--out", default="", help="write the aggregated summary (and raw reports) as JSON")
@@ -138,15 +153,15 @@ def main():
     seeds = list(range(args.seed0, args.seed0 + args.seeds))
     with ThreadPoolExecutor(max_workers=max(1, args.parallel)) as pool:
         reports = list(pool.map(
-            lambda s: run_one(binary, s, args.seconds, args.agent, args.plugin, args.market, args.extra), seeds))
+            lambda s: run_one(binary, s, args.seconds, args.specs, args.market, args.extra), seeds))
 
     summary = summarise(reports)
     summary["config"] = {
-        "seconds": args.seconds, "seeds": seeds, "agents": args.agent, "plugins": args.plugin,
+        "seconds": args.seconds, "seeds": seeds, "specs": args.specs,
         "market": args.market, "extra": args.extra,
     }
     if not args.quiet:
-        print_summary(summary, args.agent + args.plugin)
+        print_summary(summary, args.specs)
     if args.out:
         Path(args.out).parent.mkdir(parents=True, exist_ok=True)
         with open(args.out, "w") as f:
