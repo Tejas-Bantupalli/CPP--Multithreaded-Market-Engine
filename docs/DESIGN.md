@@ -57,6 +57,18 @@ events, keeps the last top-of-book, and records agent-side latency histograms.
 Strategies are registered with the engine before the session and run in their
 own thread. Nothing about the agent set is hardcoded.
 
+## Strategy plugins (`include/plugin.h`)
+
+A strategy can be a shared library: one .cpp with a `Strategy` subclass and
+`MARKET_PLUGIN(ClassName)`, built with `make plugin SRC=...` and loaded with
+`--plugin path.so[:k=v]`. The host resolves two C symbols (`market_plugin_api_version`,
+`market_plugin_create`), checks the API version, constructs the strategy, and
+never closes the library because the object's vtable lives there. Everything
+a plugin touches (`Strategy`, `AgentContext`, `Params`, `RollingSMA`) is
+header-only, so plugins have no host symbols to resolve and the ABI is just
+"same compiler, same headers". This is what lets the generational loop
+(`agents/loop.py --proposer claude-code`) run model-written strategies.
+
 ## Events
 
 Private to one agent: `Ack`, `Fill`, `Cancelled`, `Rejected`.

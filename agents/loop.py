@@ -13,6 +13,10 @@ about the last generation is controlled by --info:
   market   plus market-wide statistics: trades, price path, engine throughput
   rivals   plus every other agent's strategy, parameters, and PnL distribution
 
+--proposer selects the action space: claude and mock pick catalogue parameters;
+claude-code and mock-code write a C++ strategy that is compiled into a plugin
+(generated sources and libraries land in <out>/code).
+
 Output per run directory: gen_<k>.json (proposals + sweep summary), trajectory.jsonl
 (one line per subject per generation), and config.json.
 """
@@ -30,9 +34,17 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from catalogue import to_spec  # noqa: E402
 from proposer import ClaudeProposer, MockProposer  # noqa: E402
+from codegen import ClaudeCodeProposer, MockCodeProposer  # noqa: E402
 import sweep  # noqa: E402
 
 DEFAULT_BACKGROUND = ["mm", "noise", "noise", "noise"]
+
+
+def spec_of(proposal):
+    """Engine spec for a proposal: a compiled plugin if it carries one, else a catalogue strategy."""
+    if proposal.get("spec"):
+        return proposal["spec"]
+    return to_spec(proposal.strategy, proposal.params)
 
 
 def agent_report(row):
@@ -78,7 +90,8 @@ def main():
     ap.add_argument("--subject", action="append", default=[], help="name[:persona], repeatable")
     ap.add_argument("--background", default=",".join(DEFAULT_BACKGROUND), help="comma-separated fixed agent specs")
     ap.add_argument("--info", choices=["own", "market", "rivals"], default="own")
-    ap.add_argument("--proposer", choices=["claude", "mock"], default="claude")
+    ap.add_argument("--proposer", choices=["claude", "mock", "claude-code", "mock-code"], default="claude",
+                    help="claude/mock choose catalogue parameters; claude-code/mock-code write C++ plugins")
     ap.add_argument("--model", default="claude-opus-5")
     ap.add_argument("--effort", default="high")
     ap.add_argument("--parallel", type=int, default=2)
@@ -97,11 +110,17 @@ def main():
     (out / "config.json").write_text(json.dumps(vars(args), indent=1))
 
     proposers = {}
+    code_dir = out / "code"
     for i, (name, persona) in enumerate(subjects):
         if args.proposer == "mock":
             proposers[name] = MockProposer(seed=i, start_strategy=["momentum", "meanrev", "mm"][i % 3])
-        else:
+        elif args.proposer == "claude":
             proposers[name] = ClaudeProposer(model=args.model, persona=persona, effort=args.effort)
+        elif args.proposer == "mock-code":
+            proposers[name] = MockCodeProposer(code_dir, seed=i, binary=args.binary)
+        else:
+            proposers[name] = ClaudeCodeProposer(code_dir, model=args.model, persona=persona,
+                                                 effort=args.effort, binary=args.binary)
 
     history = {name: [] for name, _ in subjects}
     last_summary, last_runs, last_specs = None, None, None
@@ -117,14 +136,14 @@ def main():
             proposals[name] = proposal
             for w in warnings:
                 print(f"  [{name}] warning: {w}")
-            print(f"gen {gen} {name:<10} -> {to_spec(proposal.strategy, proposal.params)}")
+            print(f"gen {gen} {name:<10} -> {spec_of(proposal)}")
             print(f"      {proposal.rationale[:300]}")
 
-        specs = background + [to_spec(proposals[n].strategy, proposals[n].params) for n, _ in subjects]
+        specs = background + [spec_of(proposals[n]) for n, _ in subjects]
         seeds = list(range(gen * 1000 + 1, gen * 1000 + 1 + args.seeds))
         from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=max(1, args.parallel)) as pool:
-            runs = list(pool.map(lambda s: sweep.run_one(args.binary, s, args.seconds, specs, [], "", []), seeds))
+            runs = list(pool.map(lambda s: sweep.run_one(args.binary, s, args.seconds, specs), seeds))
         summary = sweep.summarise(runs)
 
         gen_record = {"generation": gen, "specs": specs, "seeds": seeds, "proposals": {}, "summary": summary}

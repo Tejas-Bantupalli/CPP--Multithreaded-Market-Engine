@@ -53,6 +53,29 @@ Output in `--out`:
 - `gen_<k>.json`: the full sweep summary and raw per-seed reports.
 - `config.json`: the arguments used.
 
+## Agents that write code
+
+`--proposer claude-code` replaces the catalogue with a C++ action space. Each
+generation the agent returns one source file defining a `Strategy` subclass
+that ends with `MARKET_PLUGIN(ClassName)`. The loop compiles it as a shared
+library, runs it for 0.3 s in a small market to catch crashes and hangs, and
+feeds compiler or runtime errors back for up to three attempts. The compiled
+library becomes the agent for that generation. Sources and libraries land in
+`<out>/code`; `--proposer mock-code` exercises the same pipeline offline by
+perturbing `plugins/example_breakout.cpp`.
+
+Generated code is compiled and executed on your machine with your privileges.
+The engine gives a plugin nothing beyond the `AgentContext` interface, but the
+language does not enforce that. Read the sources before reusing them and do
+not run this on a machine holding anything you care about without a sandbox.
+
+Writing a plugin by hand:
+
+```
+make plugin SRC=plugins/my_strategy.cpp
+./build/market_engine --plugin build/plugins/my_strategy.so:size=3 --agent mm --agent noise
+```
+
 ## Reading a trajectory
 
 Score is mean PnL in dollars over the generation's seeds. Compare the score of
