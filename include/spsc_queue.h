@@ -5,7 +5,7 @@
 
 template <typename T, size_t CAP>
 class SPSCQueue {
-    static_assert((CAP & (CAP - 1)) == 0, "CAP must be power of 2");
+    static_assert(CAP >= 2 && (CAP & (CAP - 1)) == 0, "CAP must be a power of 2 >= 2");
 public:
     bool try_push(const T& v) {
         const auto h = head_.load(std::memory_order_relaxed);

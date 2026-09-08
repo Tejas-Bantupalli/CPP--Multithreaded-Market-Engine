@@ -1,0 +1,17 @@
+# Build products (including artifacts from the old build layout)
+/build/
+/a.out
+/tests/engine_tests
+*.o
+*.d
+*.o.tmp
+*.dSYM/
+
+# Generated experiment output; keep datasets elsewhere when they should be versioned
+/results/
+/outputs/
+
+# Python and macOS housekeeping
+__pycache__/
+*.py[cod]
+.DS_Store
