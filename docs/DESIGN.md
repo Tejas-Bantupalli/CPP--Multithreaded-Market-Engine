@@ -77,7 +77,6 @@ so recording is a couple of integer ops. Reported as p50/p90/p99/p99.9/max.
 | match           | engine | engine pops                | book and events done      |
 
 ## Shutdown lifecycle
-
 1. `running = false`. Agents finish their current loop and exit.
 2. Join all agent threads. No producer can submit after this.
 3. `producers_done = true`. The engine keeps draining until every inbound
@@ -97,3 +96,17 @@ reports the trade count and a book checksum, which must match the session's.
 * No risk limits at the engine; strategies police their own inventory.
 * The background market (market maker plus noise traders) is deliberately
   simple. Tune it before drawing conclusions about strategy quality.
+
+## Background market
+
+The noise traders share a latent true value: a random walk with jumps stepped
+once per millisecond of session time (`Fundamental` in `src/strategies.cpp`).
+Each noise trader builds its own copy from the session's market seed, so they
+agree on the path without sharing memory. Each sees it through private
+mean-reverting noise and takes liquidity when its view is beyond the touch.
+Jumps create trends for momentum; the walk between jumps is what mean
+reversion fades; the market maker earns the spread and is picked off on jumps.
+Tune with `--market fsigma=..,jump=..,jumpsize=..,drift=..`.
+
+`scripts/sweep.py` runs a configuration over many seeds and reports PnL mean,
+spread, hit rate, and engine latency medians. Use it for every comparison.

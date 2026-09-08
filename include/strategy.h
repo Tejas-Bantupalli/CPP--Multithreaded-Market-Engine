@@ -42,11 +42,18 @@ struct AgentStats {
 class AgentContext {
 public:
     AgentContext(AgentId id, SPSCQueue<Command, QCAP>& out, SPSCQueue<Event, QCAP>& in,
-                 Price initial_px, uint64_t seed)
-        : id_(id), out_(out), in_(in), last_px_(initial_px), rng_(seed) {}
+                 Price initial_px, uint64_t seed, uint64_t market_seed)
+        : id_(id), out_(out), in_(in), last_px_(initial_px), rng_(seed), market_seed_(market_seed) {}
 
     AgentId id() const { return id_; }
     Ts now() const { return now_ns(); }
+    // Nanoseconds since the session started. Every agent shares the same origin.
+    Ts elapsed() const { return now_ns() - t_start_; }
+    // Session-wide seed. Agents that must agree on a latent process (the noise
+    // traders' fundamental value) derive it from this without sharing memory.
+    uint64_t market_seed() const { return market_seed_; }
+    Price initial_px() const { return initial_px_; }
+    void begin_session(Ts t_start) { t_start_ = t_start; } // engine, before the agent thread starts
     std::mt19937_64& rng() { return rng_; }
 
     // Returns the new order id, or 0 if the outbound queue was full.
@@ -158,5 +165,8 @@ private:
     Price ask_px_ = 0;
     Qty ask_qty_ = 0;
     std::mt19937_64 rng_;
+    uint64_t market_seed_;
+    Price initial_px_ = last_px_;
+    Ts t_start_ = 0;
     AgentStats stats_;
 };
