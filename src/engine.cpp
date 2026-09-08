@@ -56,8 +56,8 @@ struct Engine::Slot {
     uint64_t events_dropped = 0;
     Histogram submit_to_pop;
 
-    Slot(AgentId i, std::unique_ptr<Strategy> s, Price px, uint64_t seed)
-        : id(i), strategy(std::move(s)), ctx(i, in, out, px, seed) {}
+    Slot(AgentId i, std::unique_ptr<Strategy> s, Price px, uint64_t seed, uint64_t market_seed)
+        : id(i), strategy(std::move(s)), ctx(i, in, out, px, seed, market_seed) {}
 };
 
 // ===================== Engine-thread state =====================
@@ -96,7 +96,7 @@ AgentId Engine::add_agent(std::unique_ptr<Strategy> s) {
     if (running_.load()) throw std::logic_error("add_agent during run");
     const AgentId id = static_cast<AgentId>(slots_.size());
     const uint64_t seed = cfg_.seed * 1000003ULL + id * 7919ULL + 1;
-    slots_.push_back(std::make_unique<Slot>(id, std::move(s), cfg_.initial_px, seed));
+    slots_.push_back(std::make_unique<Slot>(id, std::move(s), cfg_.initial_px, seed, cfg_.seed));
     return id;
 }
 
@@ -323,6 +323,7 @@ RunReport Engine::run() {
     impl_->logger.start();
 
     const Ts t_start = now_ns();
+    for (auto& s : slots_) s->ctx.begin_session(t_start);
     std::thread eng([this] { engine_loop(); });
     for (auto& s : slots_) s->thread = std::thread([this, &s] { agent_loop(*s); });
 

@@ -22,6 +22,8 @@ void usage() {
         "  --json PATH        write the report as JSON\n"
         "  --trades PATH      write a trade log CSV (off the hot path)\n"
         "  --cmdlog PATH      write every processed command as CSV, replayable with build/replay\n"
+        "  --market k=v,...   default parameters applied to every agent (e.g. the noise traders'\n"
+        "                     shared fundamental: fsigma, jump, jumpsize, drift)\n"
         "  --quiet            print only the summary line\n"
         "strategies and their parameters:\n" << strategy_help() <<
         "default agent set: mm noise noise noise momentum meanrev\n";
@@ -40,6 +42,7 @@ int main(int argc, char** argv) {
     EngineConfig cfg;
     std::vector<std::string> specs;
     std::string json_path;
+    std::string market_spec;
     bool quiet = false;
 
     for (int i = 1; i < argc; ++i) {
@@ -59,17 +62,26 @@ int main(int argc, char** argv) {
         else if (a == "--json") json_path = need("a path");
         else if (a == "--trades") cfg.trade_log = need("a path");
         else if (a == "--cmdlog") cfg.cmd_log = need("a path");
+        else if (a == "--market") market_spec = need("k=v,k=v");
         else if (a == "--quiet") quiet = true;
         else { std::cerr << "unknown option " << a << "\n"; usage(); return 2; }
     }
 
     if (specs.empty()) specs = {"mm", "noise", "noise", "noise", "momentum", "meanrev"};
 
+    // --market parameters are defaults for every agent; an agent's own spec overrides them.
+    Params market;
+    if (!market_spec.empty()) {
+        std::string dummy;
+        if (!parse_agent_spec("market:" + market_spec, dummy, market)) { std::cerr << "bad --market spec\n"; return 2; }
+    }
+
     Engine engine(cfg);
     for (const std::string& spec : specs) {
         std::string name;
         Params params;
         if (!parse_agent_spec(spec, name, params)) { std::cerr << "bad agent spec: " << spec << "\n"; return 2; }
+        for (const auto& kv : market.kv) params.kv.emplace(kv.first, kv.second);
         auto s = make_strategy(name, params);
         if (!s) { std::cerr << "unknown strategy: " << name << "\n"; return 2; }
         engine.add_agent(std::move(s));
