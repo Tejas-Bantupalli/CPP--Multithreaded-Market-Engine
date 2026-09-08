@@ -43,7 +43,7 @@ def summarise(name, rows):
     imitations = sum(1 for r in rows if r["proposal"].get("rationale", "").startswith("imitate: copy"))
     moves = [param_distance(rows[i - 1]["proposal"], rows[i]["proposal"]) for i in range(1, n)]
     return {
-        "subject": name, "rule": rows[0].get("rule", "?"), "info": rows[0].get("info", "?"),
+        "subject": name, "rule": rows[0].get("rule") or f"llm/{rows[0].get('model', '?')}", "info": rows[0].get("info", "?"),
         "generations": n, "first": scores[0], "last": scores[-1], "best": scores[best_i], "best_gen": best_i,
         "tail_mean": statistics.fmean(tail), "tail_hit": statistics.fmean(r["hit_rate"] for r in rows[-len(tail):]),
         "improvement": statistics.fmean(tail) - scores[0],
