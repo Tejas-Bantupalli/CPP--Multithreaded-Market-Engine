@@ -10,6 +10,10 @@
 #include <vector>
 
 enum class IdlePolicy { Spin, Yield, Sleep };
+// How broadcast events (Trade, BookUpdate, SessionStart) reach agents.
+//   Spsc:      one push per agent into its private queue (O(agents) per broadcast)
+//   Multicast: one publish into a shared ring; each agent reads with its own cursor
+enum class Fanout { Spsc, Multicast };
 
 struct EngineConfig {
     Price initial_px = 10000;   // 100.00
@@ -20,6 +24,7 @@ struct EngineConfig {
     IdlePolicy agent_idle = IdlePolicy::Yield;
     IdlePolicy engine_idle = IdlePolicy::Yield;
     bool pin_threads = false;   // Linux only
+    Fanout fanout = Fanout::Spsc;
     std::string trade_log;      // CSV path or empty
     std::string cmd_log;        // CSV path or empty
 };

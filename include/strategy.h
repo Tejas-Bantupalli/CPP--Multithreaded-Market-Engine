@@ -1,6 +1,7 @@
 #pragma once
 
 #include "histogram.h"
+#include "multicast_ring.h"
 #include "spsc_queue.h"
 #include "types.h"
 
@@ -114,7 +115,15 @@ public:
     const AgentStats& stats() const { return stats_; }
 
     // ----- engine-side plumbing (called on the agent thread by the runner) -----
-    bool poll(Event& ev) { return in_.try_pop(ev); }
+    using EventRing = MulticastRing<Event, QCAP>;
+    void attach_ring(const EventRing* ring) { ring_ = ring; } // before the agent thread starts
+    uint64_t multicast_dropped() const { return reader_.dropped; }
+
+    // Private events first, then broadcasts from the ring when one is attached.
+    bool poll(Event& ev) {
+        if (in_.try_pop(ev)) return true;
+        return ring_ && ring_->try_read(reader_, ev);
+    }
 
     void dispatch(const Event& ev, Strategy& s) {
         t_dispatch_ = now_ns();
@@ -165,6 +174,8 @@ private:
     Price ask_px_ = 0;
     Qty ask_qty_ = 0;
     std::mt19937_64 rng_;
+    const EventRing* ring_ = nullptr;
+    EventRing::Reader reader_;
     uint64_t market_seed_;
     Price initial_px_ = last_px_;
     Ts t_start_ = 0;

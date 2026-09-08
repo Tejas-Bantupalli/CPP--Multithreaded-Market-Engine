@@ -12,8 +12,10 @@ CASES = (
     "book_rejects",
     "histogram",
     "spsc_wraparound",
+    "multicast_ring",
     "agent_spec",
     "engine_conservation",
+    "engine_multicast",
     "engine_shutdown_drain",
     "engine_matching_pair",
 )
