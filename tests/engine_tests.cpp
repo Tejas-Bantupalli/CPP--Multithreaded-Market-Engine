@@ -258,7 +258,9 @@ struct Flood : Strategy {
 };
 
 void engine_shutdown_drain() {
-    Engine e(short_cfg(0.2));
+    EngineConfig cfg = short_cfg(0.2);
+    cfg.collar = 0; // the flood bids at 50 ticks on purpose; this test is about draining, not prices
+    Engine e(cfg);
     for (int i = 0; i < 3; ++i) e.add_agent(std::make_unique<Flood>());
     const RunReport r = e.run();
     uint64_t submitted = 0;
@@ -267,6 +269,28 @@ void engine_shutdown_drain() {
     CHECK(r.commands == submitted);
     CHECK(r.open_orders == submitted && r.trades == 0);
     CHECK(r.final_bid == 50 && r.final_bid_qty == static_cast<Qty>(submitted));
+}
+
+// Quotes far outside the collar; every order must be rejected with reason Collar.
+struct FarQuoter : Strategy {
+    int collar_rejects = 0;
+    const char* name() const override { return "far"; }
+    void on_idle(AgentContext& ctx) override { ctx.submit(Side::Buy, 8000, 1); ctx.submit(Side::Sell, 12000, 1); }
+    void on_event(const Event& ev, AgentContext&) override { if (ev.kind == EventKind::Rejected && ev.reason == RejectReason::Collar) ++collar_rejects; }
+};
+
+void engine_collar() {
+    EngineConfig cfg = short_cfg(0.2);
+    cfg.collar = 0.05; // initial 10000 -> [9500, 10500]
+    Engine e(cfg);
+    auto* fq = new FarQuoter();
+    e.add_agent(std::unique_ptr<Strategy>(fq));
+    e.add_agent(std::make_unique<Flood>()); // bids at 50 ticks: also outside the collar
+    const RunReport r = e.run();
+    CHECK(r.open_orders == 0 && r.trades == 0);
+    CHECK(r.agents[0].orders_rejected == r.agents[0].orders_processed && r.agents[0].orders_processed > 0);
+    CHECK(r.agents[1].orders_rejected == r.agents[1].orders_processed);
+    CHECK(fq->collar_rejects > 0);
 }
 
 // Seller rests asks; buyer lifts them one at a time as it sees them.
@@ -327,6 +351,7 @@ int main(int argc, char** argv) {
         else if (name == "spsc_wraparound") spsc_wraparound();
         else if (name == "engine_conservation") engine_conservation();
         else if (name == "engine_multicast") engine_multicast();
+        else if (name == "engine_collar") engine_collar();
         else if (name == "multicast_ring") multicast_ring();
         else if (name == "engine_shutdown_drain") engine_shutdown_drain();
         else if (name == "engine_matching_pair") engine_matching_pair();

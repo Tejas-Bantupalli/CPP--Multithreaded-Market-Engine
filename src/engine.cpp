@@ -77,10 +77,15 @@ struct Engine::Impl {
     std::vector<Command> batch;
     Price top_bid = -1, top_ask = -1;
     Qty top_bq = 0, top_aq = 0;
+    Price collar_lo = 0, collar_hi = 0; // 0,0 = off
 
     explicit Impl(const EngineConfig& c)
         : book(c.min_px, c.max_px), logger(c.trade_log, c.cmd_log), last_px(c.initial_px) {
         if (c.fanout == Fanout::Multicast) ring = std::make_unique<AgentContext::EventRing>();
+        if (c.collar > 0) {
+            collar_lo = static_cast<Price>(c.initial_px * (1.0 - c.collar));
+            collar_hi = static_cast<Price>(c.initial_px * (1.0 + c.collar));
+        }
         fills.reserve(256);
         stp.reserve(64);
         batch.reserve(4096);
@@ -152,6 +157,19 @@ void Engine::process(const Command& c) {
             ev.reason = why;
             ++owner.orders_rejected;
         }
+        send(c.agent, ev);
+        return;
+    }
+
+    if (im.collar_hi > 0 && (c.px < im.collar_lo || c.px > im.collar_hi)) {
+        ++owner.orders_rejected;
+        Event ev;
+        ev.kind = EventKind::Rejected;
+        ev.order_id = c.id;
+        ev.reason = RejectReason::Collar;
+        ev.side = c.side;
+        ev.px = c.px;
+        ev.qty = c.qty;
         send(c.agent, ev);
         return;
     }

@@ -40,6 +40,7 @@ enum class RejectReason : uint8_t {
     DuplicateId,
     UnknownOrder,
     NotOwner,
+    Collar,       // outside the session's limit-up/limit-down band
 };
 
 inline const char* reject_name(RejectReason r) {
@@ -50,6 +51,7 @@ inline const char* reject_name(RejectReason r) {
         case RejectReason::DuplicateId: return "duplicate_id";
         case RejectReason::UnknownOrder: return "unknown_order";
         case RejectReason::NotOwner: return "not_owner";
+        case RejectReason::Collar: return "collar";
     }
     return "?";
 }
