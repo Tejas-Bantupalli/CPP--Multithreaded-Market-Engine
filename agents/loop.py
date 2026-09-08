@@ -70,9 +70,9 @@ def build_report(info, subject_idx, summary, runs, specs):
             "commands_per_sec": round(e["commands_per_sec"]["mean"]),
             "price_change_mean": round(statistics.fmean(price_moves), 2),
             "price_change_std": round(statistics.pstdev(price_moves), 2) if len(price_moves) > 1 else 0.0,
-            "final_spread_ticks_median": statistics.median(
-                (r["final_ask"] - r["final_bid"]) / 0.01 for r in runs if r["final_bid_qty"] and r["final_ask_qty"]) if any(
-                r["final_bid_qty"] and r["final_ask_qty"] for r in runs) else None,
+            "final_spread_ticks_median": round(statistics.median(
+                (r["final_ask"] - r["final_bid"]) / 0.01 for r in runs if r["final_bid_qty"] and r["final_ask_qty"]), 2)
+            if any(r["final_bid_qty"] and r["final_ask_qty"] for r in runs) else None,
         }
     if info == "rivals":
         report["others"] = [
