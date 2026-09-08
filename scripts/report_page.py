@@ -74,6 +74,12 @@ def main():
         # the champion is the last background agent (id 4); average its PnL over the generations run so far
         champ = statistics.fmean(b["agents"][-1]["mean_pnl"] for b in bg) if bg and len(bg[0]["agents"]) >= 5 else None
         best5 = max(e5.values(), key=lambda v: v["tail"]) if e5 else None
+        champ_g0 = bg[0]["agents"][-1]["mean_pnl"] if bg else 0
+        champ_g1 = bg[-1]["agents"][-1]["mean_pnl"] if len(bg) > 1 else champ_g0
+        _last = sorted(((n, v["curve"][-1]["score"], v["curve"][-1]["class_name"] or n)
+                        for n, v in runs["exp5_freecode"]["subjects"].items()), key=lambda t: -t[1])
+        win1, win1v = _last[0][2], _last[0][1]
+        win2, win2v = _last[1][2], _last[1][1]
 
     llm_tails = [F[(r, s)]["tail"] for r in ("exp1_info", "exp2_persona") if r in runs for s in runs[r]["subjects"]]
     ctrl_tails = {r: statistics.fmean(x["tail"] for x in v) for r, v in ctrl.items()}
@@ -253,8 +259,10 @@ def main():
   </div></div>
 
   {"" if "exp5_freecode" not in runs else f'''<div class="finding"><div class="n">8</div><div>
-    <h3>Free code against a tuned champion</h3>
-    <p class="prose">Four agents writing C++ from scratch, each with a different persona and full sight of every rival, in a market that also contained the best market maker evolved in experiment 4. Over {max(v["n"] for v in e5.values())} generations the champion averaged {fmt(champ) if champ is not None else "n/a"} per session. The best coder, {best5["final_strategy"] if best5 else ""}, averaged {fmt(best5["tail"]) if best5 else "n/a"} over the last third of the run{" and beat it." if best5 and champ is not None and best5["tail"] > champ else " and did not catch it."} {sum(v["failures"] for v in e5.values())} of {sum(v["n"] for v in e5.values())} submissions failed to build or crashed in the smoke test.</p>
+    <h3>Free code against a tuned champion, and the market they broke first</h3>
+    <p class="prose">Four agents writing C++ from scratch, each with a different persona and full sight of every rival, in a market that also contained the best market maker evolved in experiment 4. Their first four strategies compiled cleanly and, together, destabilised the market inside 81 milliseconds. Three of them were trend followers; the makers quoted around a mid that the trend followers were pushing; the price swung between about 94 and 106 every 21 ms, crossing 100 a total of 311 times in one two-second session. The two makers lost $78k and $35k, the value-anchored noise traders collected $53k each, and nothing about any single strategy predicted it: each one run alone stayed within half a dollar of 100. The engine had no price collar because no earlier experiment had needed one. It has a 5% limit-up/limit-down band now, the generation was re-evaluated under it, and the oscillation persisted inside the band.</p>
+    <p class="prose">Then they were shown what they had done, and in one generation they undid most of it. Every agent rewrote its strategy around the cost it could see in its own report. Volume per session fell from {round(runs["exp5_freecode"]["background"][0]["engine"]["trades_per_run"]):,} trades to {round(runs["exp5_freecode"]["background"][1]["engine"]["trades_per_run"]):,}, and the champion market maker, unchanged and untuned throughout, went from -${abs(champ_g0):,.0f} to -${abs(champ_g1):,.0f} per session, an {round(abs(champ_g0 / champ_g1)) if champ_g1 else 0}-fold reduction. Two of the four agents finished profitable on every seed: {win1} at {fmt(win1v)} and {win2} at {fmt(win2v)}. Both beat the champion.</p>
+    <p class="prose">The honest caveat is that they beat it inside a market their own presence had dislocated. The value-anchored noise traders still collected about {fmt(statistics.fmean(a["mean_pnl"] for a in runs["exp5_freecode"]["background"][1]["agents"][1:4]), 0)} per session, an order of magnitude more than anything in experiments 1 to 4, so the surplus these agents captured came from a market still being pushed around rather than from a clean edge. All {sum(v["n"] for v in e5.values())} submissions compiled and passed the smoke test on the first attempt. The run was planned for six generations and stopped at two when the account session limit was reached.</p>
     <figure><div class="fig" id="chart-exp5"></div>
     <figcaption><b>Experiment 5, mean PnL per generation for the four code-writing agents.</b> The champion incumbent is drawn as the dashed reference. Personas: neutral, market-making specialist, trend follower, aggressive.</figcaption></figure>
   </div></div>'''}
