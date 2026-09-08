@@ -16,6 +16,7 @@ CASES = (
     "agent_spec",
     "engine_conservation",
     "engine_multicast",
+    "engine_collar",
     "engine_shutdown_drain",
     "engine_matching_pair",
 )

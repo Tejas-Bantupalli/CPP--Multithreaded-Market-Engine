@@ -21,6 +21,7 @@ void usage() {
         "  --idle MODE        agent idle policy: spin | yield | sleep (default yield)\n"
         "  --engine-idle MODE engine idle policy (default yield)\n"
         "  --pin              pin threads to cores (Linux only)\n"
+        "  --collar F         limit-up/limit-down: reject orders more than F of the initial price away (default 0.05, 0 = off)\n"
         "  --fanout MODE      broadcast path: spsc (one push per agent) | multicast (shared ring, default spsc)\n"
         "  --json PATH        write the report as JSON\n"
         "  --trades PATH      write a trade log CSV (off the hot path)\n"
@@ -64,6 +65,7 @@ int main(int argc, char** argv) {
         else if (a == "--idle") { if (!parse_idle(need("a mode"), cfg.agent_idle)) { std::cerr << "bad idle mode\n"; return 2; } }
         else if (a == "--engine-idle") { if (!parse_idle(need("a mode"), cfg.engine_idle)) { std::cerr << "bad idle mode\n"; return 2; } }
         else if (a == "--pin") cfg.pin_threads = true;
+        else if (a == "--collar") cfg.collar = std::stod(need("a fraction, 0 to disable"));
         else if (a == "--fanout") {
             const std::string f = need("spsc|multicast");
             if (f == "spsc") cfg.fanout = Fanout::Spsc;

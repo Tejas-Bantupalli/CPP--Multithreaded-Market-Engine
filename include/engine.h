@@ -25,6 +25,10 @@ struct EngineConfig {
     IdlePolicy engine_idle = IdlePolicy::Yield;
     bool pin_threads = false;   // Linux only
     Fanout fanout = Fanout::Spsc;
+    // Limit-up/limit-down: reject new orders priced more than this fraction away from
+    // the initial price. 0 disables. Keeps a feedback loop between agents from
+    // dislocating a thin book by tens of percent inside one session.
+    double collar = 0.05;
     std::string trade_log;      // CSV path or empty
     std::string cmd_log;        // CSV path or empty
 };
