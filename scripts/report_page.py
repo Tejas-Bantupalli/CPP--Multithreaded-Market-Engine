@@ -279,6 +279,7 @@ def main():
       </tbody>
     </table></div>
     <p class="prose">The endpoint is the economically correct one, and no agent was told it. In this market the noise traders are the only participants who can see the latent value. Everyone else is uninformed, so on average they cannot win, and the best available move is to trade as little as possible. Given a free hand to write any strategy in C++, five generations of evidence, and no theory, four agents converged on approximately that. They did not find an edge because there was none to find, and what they learned instead was to stop paying for the privilege of looking.</p>
+    <p class="prose">Every strategy either experiment produced is readable in full, with each one's PnL and the agent's own reasoning, in the <a href="https://claude.ai/code/artifact/53e9c854-c650-489b-a8ea-64465b93aa86" style="color:var(--event)">Agent Strategy Archive</a>: 29 files and 8,255 lines, none of it written by a person.</p>
     <p class="prose">Of the {sum(v["n"] for v in e5.values())} submissions, every one that was written compiled and passed the smoke test on the first attempt. One was never written: the maker agent's generation-4 proposal was lost to an account rate limit, so its generation-3 strategy was carried forward and the non-submission is recorded in the trajectory. The run was planned for six generations and finalised at five for the same reason.</p>
   </div></div>'''}
 
