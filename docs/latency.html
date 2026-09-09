@@ -1,0 +1,214 @@
+<title>Tick To Trade</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --bg:#F4F6F9; --panel:#FFFFFF; --panel-2:#E8EDF3; --ink:#1C2530; --muted:#6B7785; --line:#C9D2DC;
+    --accent:#C8641E; --accent-soft:#F7E3D3; --event:#2E6F9E; --code-bg:#EAEFF4;
+    --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#4a3aa7; --grid:#E1E4E9; --axis:#B8C0CA;
+    --good:#0F7B4F; --bad:#B3261E;
+  }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+    --bg:#141A21; --panel:#1C242E; --panel-2:#25303C; --ink:#E6EBF1; --muted:#97A3B1; --line:#3A4754;
+    --accent:#E8853B; --accent-soft:#3D2A1B; --event:#6FAEDD; --code-bg:#232D38;
+    --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#9085e9; --grid:#2A3541; --axis:#4A5866;
+    --good:#4CC04C; --bad:#F08A80;
+  } }
+  :root[data-theme="dark"] {
+    --bg:#141A21; --panel:#1C242E; --panel-2:#25303C; --ink:#E6EBF1; --muted:#97A3B1; --line:#3A4754;
+    --accent:#E8853B; --accent-soft:#3D2A1B; --event:#6FAEDD; --code-bg:#232D38;
+    --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#9085e9; --grid:#2A3541; --axis:#4A5866;
+    --good:#4CC04C; --bad:#F08A80;
+  }
+  body { background:var(--bg); color:var(--ink); font-family:"IBM Plex Sans",system-ui,sans-serif; font-size:16px; line-height:1.55; }
+  main { max-width:1000px; margin:0 auto; padding:40px 24px 80px; }
+  .prose { max-width:68ch; }
+  h1,h2,h3 { font-family:"IBM Plex Sans Condensed",sans-serif; font-weight:600; line-height:1.15; text-wrap:balance; margin:0; }
+  h1 { font-size:44px; letter-spacing:-0.01em; }
+  h2 { font-size:27px; margin-top:60px; padding-top:20px; border-top:1px solid var(--line); }
+  h3 { font-size:19px; margin-top:28px; }
+  p { margin:14px 0; }
+  .lede { font-size:19px; color:var(--muted); margin-top:12px; }
+  .eyebrow { font-family:"IBM Plex Mono",monospace; font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:var(--accent); }
+  code { font-family:"IBM Plex Mono",monospace; font-size:.9em; background:var(--code-bg); padding:1px 5px; border-radius:3px; }
+  pre { background:var(--code-bg); padding:14px 16px; border-radius:4px; overflow-x:auto; font-family:"IBM Plex Mono",monospace; font-size:13px; line-height:1.5; }
+  .tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:14px; margin:22px 0; }
+  .tile { background:var(--panel); border:1px solid var(--line); border-radius:4px; padding:14px 16px; }
+  .tile .label { font-size:13px; color:var(--muted); }
+  .tile .value { font-size:29px; font-weight:500; margin-top:3px; }
+  .tile .sub { font-size:12.5px; color:var(--muted); margin-top:2px; }
+  figure { margin:22px 0 6px; }
+  .fig { background:var(--panel); border:1px solid var(--line); border-radius:4px; padding:14px; overflow-x:auto; }
+  .fig .head { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:baseline; gap:8px 16px; margin-bottom:8px; }
+  .fig .title { font-family:"IBM Plex Sans Condensed",sans-serif; font-weight:600; font-size:16px; }
+  .fig .legend { display:flex; flex-wrap:wrap; gap:6px 16px; font-size:13px; color:var(--muted); }
+  .fig .legend span::before { content:""; display:inline-block; width:14px; height:3px; border-radius:2px; margin-right:6px; vertical-align:middle; background:var(--sw); }
+  .fig svg { width:100%; height:auto; display:block; }
+  .fig svg text { font-family:"IBM Plex Sans",sans-serif; font-size:11.5px; fill:var(--muted); }
+  .fig svg text.lbl { fill:var(--ink); font-size:12px; }
+  figcaption { font-size:14px; color:var(--muted); margin-top:9px; max-width:78ch; }
+  figcaption b { color:var(--ink); font-weight:500; }
+  table { border-collapse:collapse; width:100%; font-size:14px; margin:12px 0; }
+  th,td { text-align:left; padding:7px 9px; border-bottom:1px solid var(--line); }
+  th { font-weight:500; color:var(--muted); font-size:12.5px; letter-spacing:.04em; text-transform:uppercase; }
+  td.num,th.num { text-align:right; font-variant-numeric:tabular-nums; font-family:"IBM Plex Mono",monospace; font-size:13px; }
+  .tablewrap { overflow-x:auto; }
+  .note { border-left:3px solid var(--accent); padding:4px 14px; color:var(--muted); font-size:15px; max-width:68ch; }
+  .quote { font-style:italic; color:var(--muted); border-left:2px solid var(--line); padding:2px 12px; margin:10px 0; font-size:14.5px; max-width:70ch; }
+  .quote b { font-style:normal; color:var(--ink); font-weight:500; }
+  .pos { color:var(--good); } .neg { color:var(--bad); }
+  ul { padding-left:20px; } li { margin:6px 0; }
+</style>
+
+<main>
+  <div class="eyebrow">CPP-Multithreaded-Market-Engine &middot; latency engineering</div>
+  <h1>Tick To Trade</h1>
+  <p class="lede prose">A lock-free C++ matching engine, three interchangeable transports measured against each other, and four language-model agents given their own latency telemetry and left to work out where their time was going. They diagnosed it correctly and mostly failed to fix it, for a reason worth knowing.</p>
+
+  <div class="tiles">
+    <div class="tile"><div class="label">Fastest tick-to-trade</div><div class="value">944 ns</div><div class="sub">engine publish to order submitted, p50</div></div>
+    <div class="tile"><div class="label">Spread between agents</div><div class="value">33x</div><div class="sub">same transport, same market, different loop</div></div>
+    <div class="tile"><div class="label">Cost of core contention</div><div class="value">3x</div><div class="sub">identical code, 8 threads vs 11</div></div>
+    <div class="tile"><div class="label">Correct self-diagnoses</div><div class="value">4 / 4</div><div class="sub">agents that located their own bottleneck</div></div>
+  </div>
+
+  <h2 id="stack">What is being measured</h2>
+  <p class="prose">One engine thread owns the order book and every participant's cash and position. Each trading agent runs on its own thread and reaches the engine only through a pair of channels. Nothing shares memory across that boundary, so the book needs no lock.</p>
+  <p class="prose"><b>Tick-to-trade</b> is the clock from the engine publishing a market event to that agent's resulting order landing in the outbound channel. It splits cleanly in two, and the split is the whole diagnostic:</p>
+  <figure><div class="fig">
+    <svg viewBox="0 0 940 128" role="img" aria-label="Tick to trade splits into data path, from engine publish until the agent's code receives the event, and compute, from receipt until the order is submitted.">
+      <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker></defs>
+      <g style="color:var(--ink)">
+        <line x1="40" y1="34" x2="900" y2="34" stroke="currentColor" stroke-width="1.2" marker-end="url(#a)"/>
+        <circle cx="60" cy="34" r="5" fill="var(--accent)"/><text x="60" y="22" text-anchor="middle" class="lbl">engine publishes</text>
+        <circle cx="520" cy="34" r="5" fill="var(--s1)"/><text x="520" y="22" text-anchor="middle" class="lbl">your code receives it</text>
+        <circle cx="850" cy="34" r="5" fill="var(--s3)"/><text x="850" y="22" text-anchor="middle" class="lbl">order submitted</text>
+        <rect x="60" y="52" width="460" height="26" rx="3" fill="var(--accent-soft)" stroke="var(--accent)"/>
+        <text x="290" y="69" text-anchor="middle" class="lbl">data path &mdash; your transport and how you wait on it</text>
+        <rect x="520" y="52" width="330" height="26" rx="3" fill="var(--panel-2)" stroke="var(--s1)"/>
+        <text x="685" y="69" text-anchor="middle" class="lbl">compute &mdash; your own strategy code</text>
+        <text x="60" y="104" class="lbl" style="fill:var(--muted)">Whichever half dominates is where the bottleneck is. In this study the data path won every time but once.</text>
+      </g>
+    </svg>
+  </div></figure>
+
+  <h2 id="transports">Three transports, everything else identical</h2>
+  <p class="prose">The channel between agent and engine is an interface with three implementations. All three preallocate the same storage and hold the same depth, so a comparison isolates the synchronisation and nothing else.</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>transport</th><th>mechanism</th><th>consumer</th></tr></thead>
+    <tbody>
+      <tr><td><code>spsc</code></td><td>lock-free ring, two atomic indices</td><td>polls</td></tr>
+      <tr><td><code>mutex</code></td><td>mutex-guarded ring</td><td>polls</td></tr>
+      <tr><td><code>mutex_cv</code></td><td>mutex plus condition variable</td><td>parks; the wake is a futex syscall</td></tr>
+    </tbody>
+  </table></div>
+  <p class="prose">I wrote a prediction down before running it: medians close together, mutex tails blowing out by one or two orders of magnitude. That was wrong in an instructive way.</p>
+  <figure><div class="fig" id="chart-pressure"></div>
+  <figcaption><b>Median tick-to-trade against thread pressure.</b> N identical agents, all on one transport, on 8 cores. The lock-free ring is 3 to 4x faster while cores are free and loses that entirely once threads outnumber them. The blocking transport is nearly flat across the whole range.</figcaption></figure>
+  <p class="prose">A polling consumer burns a core whether or not there is work. Once threads outnumber cores it is stealing time from the engine and from every other agent. A parked consumer pays a futex wake per event, which is real but constant, and gives the core back in between. The two cross at roughly one thread per core.</p>
+  <p class="prose">This is why trading firms pin threads to isolated cores and disable hyperthreading before reaching for busy-polling. Lock-free plus spin wins only when a core per thread is guaranteed. Without that guarantee it is actively counterproductive.</p>
+  <p class="note">The machine is an Apple M1: 8 cores, no SMT, but 4 performance and 4 efficiency. macOS offers no thread affinity on arm64, so a <code>--qos</code> flag requests performance cores instead. Turning it on improved every <code>mutex_cv</code> p99 in the sweep and the <code>spsc</code> median by 10 to 15%. It sharpened the measurement without changing its shape, which is what a control should do.</p>
+
+  <h2 id="agents">Four agents, told what the numbers mean and nothing else</h2>
+  <p class="prose">Then the same question was handed to language-model agents. Each wrote a complete C++ trading strategy and owned its whole stack: which transport carried its data, and its own event loop, so batch size, how it waited, and when it submitted were all its own. Each saw only its own performance, its own latency split, and the public tape. No rival information. Nothing anywhere told them that speed mattered.</p>
+  <p class="prose">All four independently chose the lock-free ring. All four wrote fast strategy code, between 164 and 368 nanoseconds. And their data paths differed by <b>33x</b>.</p>
+  <figure><div class="fig" id="chart-split"></div>
+  <figcaption><b>Generation 0: where each agent's time went.</b> Same transport, same market, same seeds. Helix has the fastest compute of the four at 164 ns and the slowest tick-to-trade at 37,888 ns; its own strategy code is 0.4% of its latency.</figcaption></figure>
+
+  <h3>They read the telemetry correctly</h3>
+  <p class="quote">THE STACK. My gen-0 latency split says data_path p50 = 20992 ns against compute p50 = 368 ns: 98% of my tick-to-trade was plumbing and waiting, not compute.<br><b>&mdash; vector</b></p>
+  <p class="quote">compute_p50 = 288 ns, data_path_p50 = 20,480 ns. My own decision code is essentially free.<br><b>&mdash; quill</b></p>
+  <p class="quote">compute_p99 was 41 us against a data_path_p99 of 3.3 us &mdash; the bottleneck was my own code, not the transport.<br><b>&mdash; apex, reaching the opposite conclusion, correctly, because its numbers genuinely were opposite</b></p>
+  <p class="prose">Four out of four located their own bottleneck. Three said the data path; the one whose data path was already fast said its compute. That is a perfect diagnostic record.</p>
+
+  <h3>Then one in four fixed it</h3>
+  <figure><div class="fig" id="chart-traj"></div>
+  <figcaption><b>Tick-to-trade across three generations.</b> Apex lost a 20x advantage rewriting for a different strategy, then recovered it. The other three set out explicitly to kill their data path and made it worse.</figcaption></figure>
+  <p class="prose">Helix, vector and quill all wrote that they were rebuilding the data path. All three converged on the same pattern, draining the whole backlog and deciding once on the freshest book, and all three got slower: 25 to 52 microseconds, 22 to 33, and 25 to 94.</p>
+
+  <h3>The mechanism is the wait, not the batch</h3>
+  <p class="prose">The obvious explanation is batching, and it is wrong. Apex consumes 17 to 21 events per order at about a microsecond of delivery. Quill consumes 52 per order at 94 microseconds. Batch size does not separate them.</p>
+  <p class="prose">What separates them is what happens between batches. Apex spins and never yields its core, so an event is picked up essentially when it is published. The others yield, get descheduled, and events pile up in the queue while they are not running. That is the same effect as the transport benchmark, arriving from the other direction.</p>
+  <p class="prose">Running apex's own generation-0 code alone and then against three rivals separates the two costs cleanly:</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>condition</th><th class="num">data path p50</th><th>attributable to</th></tr></thead>
+    <tbody>
+      <tr><td>alone with the background, 8 threads</td><td class="num">456 ns</td><td>&mdash;</td></tr>
+      <tr><td>with three rivals, 11 threads</td><td class="num">1,264 ns</td><td>core contention, 3x</td></tr>
+      <tr><td>the other three agents, same market</td><td class="num">20,000&ndash;31,000 ns</td><td>loop design, a further 20x</td></tr>
+    </tbody>
+  </table></div>
+  <p class="prose">Contention costs 3x. How you wrote your loop costs 20x on top of it. The plumbing everyone argues about was never the deciding factor here, because all four picked the same plumbing.</p>
+
+  <h2 id="honest">What I would not claim</h2>
+  <ul class="prose">
+    <li><b>The metric may be wrong for the objective.</b> Delivery latency is measured per event, so draining a backlog and deciding once on the freshest book scores badly even though the decision itself used fresher data. Three agents may have made a defensible trading choice that my instrumentation punishes. Measuring time-to-react to the event that mattered, rather than the median over all events, would test that.</li>
+    <li><b>Spinning is rivalrous.</b> Apex won by refusing to yield its core. If all four had done that on 8 cores, the benchmark says they would all have degraded. Individually rational, collectively destructive, which is the real arms race in miniature.</li>
+    <li><b>No pinning, no isolated cores, no kernel bypass.</b> Latency here is pure compute and scheduling, with no network, NIC or gateway. That isolates the one variable a strategy author controls and is not a model of a real venue's tick-to-trade.</li>
+    <li><b>Three generations and eight seeds.</b> Enough to establish the diagnosis rate and the mechanism, not enough to claim where an arms race settles.</li>
+  </ul>
+
+  <h2 id="repro">Reproduce</h2>
+  <pre>make &amp;&amp; make test                     # 21 tests, including the custom run-loop contract
+scripts/bench_transport.py --seeds 12 --seconds 2 \
+    --qos interactive --pressure 3,5,7,9,12,16,20
+./build/market_engine --agent "mm:transport=mutex_cv" --agent "noise:transport=spsc" --qos interactive</pre>
+</main>
+
+<script type="application/json" id="data">{"transport":{"config":{"binary":"/Users/Tejasb/CPP--Multithreaded-Market-Engine/build/market_engine","seeds":12,"seconds":2.0,"idle":"yield","pressure":"3,5,7,9,12,16,20","out":"results/transport.json"},"isolated":[{"transport":"spsc","tick_to_trade_p50":1696.0,"tick_to_trade_p99":54272.0,"tick_to_trade_p999":95232.0,"tick_to_trade_max":97458.0,"delivery_p50":784.0,"delivery_p99":14336.0,"delivery_p999":41472.0,"react_p50":416.0,"react_p99":4928.0,"fills":4151.416666666667,"maker_fills":4146.666666666667,"pnl_mean":39.46425,"pnl_std":11.16653646037272,"events":57475.0,"events_dropped":0,"orders":21302.416666666668},{"transport":"mutex","tick_to_trade_p50":10112.0,"tick_to_trade_p99":81920.0,"tick_to_trade_p999":121856.0,"tick_to_trade_max":136958.5,"delivery_p50":1280.0,"delivery_p99":38400.0,"delivery_p999":84992.0,"react_p50":368.0,"react_p99":22016.0,"fills":4126.583333333333,"maker_fills":4117.833333333333,"pnl_mean":36.03091666666666,"pnl_std":12.64782411759913,"events":58298.416666666664,"events_dropped":0,"orders":22058.666666666668},{"transport":"mutex_cv","tick_to_trade_p50":5632.0,"tick_to_trade_p99":25856.0,"tick_to_trade_p999":40448.0,"tick_to_trade_max":53084.0,"delivery_p50":4480.0,"delivery_p99":17920.0,"delivery_p999":28160.0,"react_p50":288.0,"react_p99":4352.0,"fills":3654.1666666666665,"maker_fills":3641.5,"pnl_mean":27.076833333333337,"pnl_std":15.32509843814678,"events":44472.583333333336,"events_dropped":0,"orders":16521.333333333332}],"head2head":[{"transport":"spsc","tick_to_trade_p50":18176.0,"tick_to_trade_p99":69632.0,"tick_to_trade_p999":103424.0,"tick_to_trade_max":133458.5,"delivery_p50":3360.0,"delivery_p99":48640.0,"delivery_p999":94208.0,"react_p50":368.0,"react_p99":15616.0,"fills":1746.5,"maker_fills":1745.25,"pnl_mean":2.9571666666666663,"pnl_std":7.665944482290199,"events":55424.5,"events_dropped":0,"orders":16924.5},{"transport":"mutex","tick_to_trade_p50":18432.0,"tick_to_trade_p99":77824.0,"tick_to_trade_p999":102400.0,"tick_to_trade_max":115354.0,"delivery_p50":5120.0,"delivery_p99":48640.0,"delivery_p999":94208.0,"react_p50":348.0,"react_p99":24832.0,"fills":1737.75,"maker_fills":1735.75,"pnl_mean":1.5430833333333334,"pnl_std":7.862986004675464,"events":55423.583333333336,"events_dropped":0,"orders":16932.5},{"transport":"mutex_cv","tick_to_trade_p50":7040.0,"tick_to_trade_p99":29952.0,"tick_to_trade_p999":55808.0,"tick_to_trade_max":94854.0,"delivery_p50":5376.0,"delivery_p99":27648.0,"delivery_p999":39936.0,"react_p50":288.0,"react_p99":5888.0,"fills":1880.4166666666667,"maker_fills":1878.75,"pnl_mean":4.42025,"pnl_std":8.820846304115799,"events":55311.0,"events_dropped":0,"orders":16677.083333333332}],"pressure":[{"agents":3,"threads":5,"spsc":{"p50":2368.0,"p99":79872.0,"delivery_p50":416.0,"react_p50":368.0},"mutex":{"p50":5440.0,"p99":112640.0,"delivery_p50":2080.0,"react_p50":368.0},"mutex_cv":{"p50":5120.0,"p99":34816.0,"delivery_p50":4224.0,"react_p50":288.0}},{"agents":5,"threads":7,"spsc":{"p50":2144.0,"p99":45568.0,"delivery_p50":832.0,"react_p50":456.0},"mutex":{"p50":11520.0,"p99":68608.0,"delivery_p50":1984.0,"react_p50":416.0},"mutex_cv":{"p50":5376.0,"p99":26624.0,"delivery_p50":4352.0,"react_p50":288.0}},{"agents":7,"threads":9,"spsc":{"p50":2160.0,"p99":35840.0,"delivery_p50":808.0,"react_p50":496.0},"mutex":{"p50":12160.0,"p99":55296.0,"delivery_p50":3488.0,"react_p50":456.0},"mutex_cv":{"p50":5120.0,"p99":32000.0,"delivery_p50":4224.0,"react_p50":248.0}},{"agents":9,"threads":11,"spsc":{"p50":5056.0,"p99":20480.0,"delivery_p50":2816.0,"react_p50":416.0},"mutex":{"p50":7488.0,"p99":43008.0,"delivery_p50":4352.0,"react_p50":416.0},"mutex_cv":{"p50":4992.0,"p99":31488.0,"delivery_p50":4096.0,"react_p50":288.0}},{"agents":12,"threads":14,"spsc":{"p50":7552.0,"p99":19968.0,"delivery_p50":4992.0,"react_p50":368.0},"mutex":{"p50":9472.0,"p99":30976.0,"delivery_p50":6656.0,"react_p50":328.0},"mutex_cv":{"p50":5120.0,"p99":38912.0,"delivery_p50":4224.0,"react_p50":288.0}},{"agents":16,"threads":18,"spsc":{"p50":12288.0,"p99":37888.0,"delivery_p50":8704.0,"react_p50":328.0},"mutex":{"p50":15104.0,"p99":40960.0,"delivery_p50":10880.0,"react_p50":328.0},"mutex_cv":{"p50":5120.0,"p99":34304.0,"delivery_p50":4864.0,"react_p50":208.0}},{"agents":20,"threads":22,"spsc":{"p50":16896.0,"p99":44032.0,"delivery_p50":13696.0,"react_p50":288.0},"mutex":{"p50":20736.0,"p99":53760.0,"delivery_p50":16000.0,"react_p50":328.0},"mutex_cv":{"p50":9280.0,"p99":56832.0,"delivery_p50":9664.0,"react_p50":248.0}}]},"transport_qos":{"config":{"binary":"/Users/Tejasb/CPP--Multithreaded-Market-Engine/build/market_engine","seeds":8,"seconds":1.5,"idle":"yield","qos":"interactive","pressure":"2,3,4,5,6,8","out":"results/transport_qos.json"},"isolated":[{"transport":"spsc","tick_to_trade_p50":1584.0,"tick_to_trade_p99":40448.0,"tick_to_trade_p999":53248.0,"tick_to_trade_max":53791.5,"delivery_p50":784.0,"delivery_p99":13696.0,"delivery_p999":30976.0,"react_p50":368.0,"react_p99":3968.0,"fills":3043.0,"maker_fills":3039.875,"pnl_mean":27.02025,"pnl_std":11.948379573712078,"events":42627.0,"events_dropped":0,"orders":15773.625},{"transport":"mutex","tick_to_trade_p50":10496.0,"tick_to_trade_p99":77824.0,"tick_to_trade_p999":112640.0,"tick_to_trade_max":124208.5,"delivery_p50":1312.0,"delivery_p99":36864.0,"delivery_p999":80896.0,"react_p50":416.0,"react_p99":22016.0,"fills":3105.75,"maker_fills":3096.75,"pnl_mean":26.653,"pnl_std":9.718755360127139,"events":43672.625,"events_dropped":0,"orders":16550.25},{"transport":"mutex_cv","tick_to_trade_p50":5760.0,"tick_to_trade_p99":22528.0,"tick_to_trade_p999":34304.0,"tick_to_trade_max":49645.5,"delivery_p50":4480.0,"delivery_p99":17920.0,"delivery_p999":27648.0,"react_p50":288.0,"react_p99":4160.0,"fills":2701.375,"maker_fills":2690.5,"pnl_mean":17.448375,"pnl_std":9.998917003074633,"events":32793.75,"events_dropped":0,"orders":12090.375}],"head2head":[{"transport":"spsc","tick_to_trade_p50":18688.0,"tick_to_trade_p99":57344.0,"tick_to_trade_p999":96256.0,"tick_to_trade_max":106208.5,"delivery_p50":3264.0,"delivery_p99":44032.0,"delivery_p999":78848.0,"react_p50":368.0,"react_p99":15872.0,"fills":1323.75,"maker_fills":1323.25,"pnl_mean":1.2001249999999999,"pnl_std":6.239109280127653,"events":41875.875,"events_dropped":0,"orders":12839.875},{"transport":"mutex","tick_to_trade_p50":18944.0,"tick_to_trade_p99":58368.0,"tick_to_trade_p999":97280.0,"tick_to_trade_max":184749.5,"delivery_p50":5120.0,"delivery_p99":44544.0,"delivery_p999":81920.0,"react_p50":348.0,"react_p99":24576.0,"fills":1279.125,"maker_fills":1278.375,"pnl_mean":1.695,"pnl_std":5.8486561918102185,"events":41832.375,"events_dropped":0,"orders":12841.25},{"transport":"mutex_cv","tick_to_trade_p50":7040.0,"tick_to_trade_p99":29952.0,"tick_to_trade_p999":54784.0,"tick_to_trade_max":100999.5,"delivery_p50":5440.0,"delivery_p99":28160.0,"delivery_p999":39936.0,"react_p50":288.0,"react_p99":8192.0,"fills":1438.0,"maker_fills":1436.875,"pnl_mean":3.2535,"pnl_std":7.9912901179972184,"events":41774.875,"events_dropped":0,"orders":12624.625}],"pressure":[{"agents":2,"threads":4,"spsc":{"p50":1952.0,"p99":43776.0,"delivery_p50":288.0,"react_p50":288.0},"mutex":{"p50":3552.0,"p99":59392.0,"delivery_p50":928.0,"react_p50":288.0},"mutex_cv":{"p50":3584.0,"p99":16512.0,"delivery_p50":3584.0,"react_p50":248.0}},{"agents":3,"threads":5,"spsc":{"p50":2496.0,"p99":113664.0,"delivery_p50":416.0,"react_p50":328.0},"mutex":{"p50":5056.0,"p99":111616.0,"delivery_p50":2032.0,"react_p50":328.0},"mutex_cv":{"p50":4864.0,"p99":21248.0,"delivery_p50":4224.0,"react_p50":288.0}},{"agents":4,"threads":6,"spsc":{"p50":1456.0,"p99":31232.0,"delivery_p50":760.0,"react_p50":368.0},"mutex":{"p50":10496.0,"p99":84992.0,"delivery_p50":1344.0,"react_p50":392.0},"mutex_cv":{"p50":5760.0,"p99":26624.0,"delivery_p50":4480.0,"react_p50":288.0}},{"agents":5,"threads":7,"spsc":{"p50":1792.0,"p99":34304.0,"delivery_p50":784.0,"react_p50":436.0},"mutex":{"p50":11264.0,"p99":61952.0,"delivery_p50":2048.0,"react_p50":436.0},"mutex_cv":{"p50":5440.0,"p99":26624.0,"delivery_p50":4480.0,"react_p50":288.0}},{"agents":6,"threads":8,"spsc":{"p50":1952.0,"p99":37888.0,"delivery_p50":784.0,"react_p50":496.0},"mutex":{"p50":12160.0,"p99":54784.0,"delivery_p50":3040.0,"react_p50":456.0},"mutex_cv":{"p50":5248.0,"p99":30208.0,"delivery_p50":4352.0,"react_p50":288.0}},{"agents":8,"threads":10,"spsc":{"p50":4096.0,"p99":25344.0,"delivery_p50":2208.0,"react_p50":456.0},"mutex":{"p50":8192.0,"p99":43008.0,"delivery_p50":3648.0,"react_p50":456.0},"mutex_cv":{"p50":5056.0,"p99":33792.0,"delivery_p50":4224.0,"react_p50":268.0}}]},"exp7":{"agents":{"helix":[{"gen":0,"t2t":37888.0,"data":31232.0,"cpu":164.0,"pnl":-8688.6,"fills":2328,"events":74328,"orders":4911},{"gen":1,"t2t":28160.0,"data":25344.0,"cpu":268.0,"pnl":-1982.9,"fills":6201,"events":67966,"orders":16049},{"gen":2,"t2t":25344.0,"data":51712.0,"cpu":4816.0,"pnl":0.9,"fills":15,"events":22528,"orders":17}],"vector":[{"gen":0,"t2t":22528.0,"data":20992.0,"cpu":368.0,"pnl":-5229.8,"fills":9221,"events":126981,"orders":50636},{"gen":1,"t2t":24064.0,"data":22016.0,"cpu":348.0,"pnl":-982.9,"fills":1702,"events":57908,"orders":10506},{"gen":2,"t2t":36864.0,"data":33280.0,"cpu":248.0,"pnl":-56.8,"fills":493,"events":35007,"orders":12018}],"apex":[{"gen":0,"t2t":1184.0,"data":944.0,"cpu":248.0,"pnl":-20246.6,"fills":2103,"events":72669,"orders":3476},{"gen":1,"t2t":34816.0,"data":22528.0,"cpu":456.0,"pnl":-1934.7,"fills":3525,"events":57874,"orders":8647},{"gen":2,"t2t":1680.0,"data":1120.0,"cpu":328.0,"pnl":-173.4,"fills":1496,"events":25492,"orders":1500}],"quill":[{"gen":0,"t2t":30976.0,"data":20480.0,"cpu":288.0,"pnl":2823.7,"fills":1662,"events":70787,"orders":2035},{"gen":1,"t2t":32768.0,"data":25344.0,"cpu":248.0,"pnl":983.9,"fills":2556,"events":50838,"orders":2581},{"gen":2,"t2t":109568.0,"data":94208.0,"cpu":248.0,"pnl":-171.9,"fills":605,"events":23551,"orders":450}]},"market":[{"gen":0,"trades":36681,"noise":30224.9},{"gen":1,"trades":20624,"noise":2715.2},{"gen":2,"trades":11898,"noise":234.5}]},"rivalry":{"alone_ns":456,"with_three_rivals_ns":1264}}</script>
+<script>
+(function() {
+  const D = JSON.parse(document.getElementById('data').textContent);
+  const S = ['--s1','--s2','--s3','--s4'];
+  const ns = v => v >= 10000 ? (v/1000).toFixed(1)+' us' : Math.round(v)+' ns';
+  function ticks(lo, hi, n) {
+    const span=hi-lo, raw=span/n, mag=Math.pow(10,Math.floor(Math.log10(raw)));
+    const step=[1,2,5,10].map(m=>m*mag).find(s=>span/s<=n)||mag*10;
+    const o=[]; for(let v=Math.ceil(lo/step)*step; v<=hi+1e-9; v+=step) o.push(+v.toFixed(6)); return o;
+  }
+  function lines(el, title, series, xs, xlabel, yfmt) {
+    const W=880,H=300,m={l:64,r:104,t:14,b:38};
+    const ys=series.flatMap(s=>s.v); let lo=0, hi=Math.max(...ys)*1.08;
+    const X=i=>m.l+i/(xs.length-1||1)*(W-m.l-m.r), Y=v=>m.t+(hi-v)/(hi-lo)*(H-m.t-m.b);
+    let g=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${title}">`;
+    ticks(lo,hi,5).forEach(t=>g+=`<line x1="${m.l}" x2="${W-m.r}" y1="${Y(t)}" y2="${Y(t)}" stroke="var(--grid)"/><text x="${m.l-8}" y="${Y(t)+4}" text-anchor="end">${yfmt(t)}</text>`);
+    g+=`<line x1="${m.l}" x2="${W-m.r}" y1="${Y(0)}" y2="${Y(0)}" stroke="var(--axis)" stroke-width="1.2"/>`;
+    xs.forEach((x,i)=>g+=`<text x="${X(i)}" y="${H-14}" text-anchor="middle">${x}</text>`);
+    g+=`<text x="${(m.l+W-m.r)/2}" y="${H-1}" text-anchor="middle">${xlabel}</text>`;
+    series.forEach((s,k)=>{
+      const c=`var(${S[k%4]})`;
+      g+=`<path d="${s.v.map((v,i)=>(i?'L':'M')+X(i)+','+Y(v)).join(' ')}" fill="none" stroke="${c}" stroke-width="2" stroke-linejoin="round"/>`;
+      s.v.forEach((v,i)=>g+=`<circle cx="${X(i)}" cy="${Y(v)}" r="4" fill="${c}" stroke="var(--panel)" stroke-width="2"><title>${s.n} at ${xs[i]}: ${yfmt(v)}</title></circle>`);
+      g+=`<text class="lbl" x="${X(s.v.length-1)+10}" y="${Y(s.v[s.v.length-1])+4+(s.dy||0)}">${s.n}</text>`;
+    });
+    el.innerHTML=`<div class="head"><span class="title">${title}</span><span class="legend">${series.map((s,k)=>`<span style="--sw:var(${S[k%4]})">${s.n}</span>`).join('')}</span></div>${g}</svg>`;
+  }
+  // pressure sweep
+  const P=D.transport_qos.pressure||[];
+  lines(document.getElementById('chart-pressure'),'Median tick-to-trade against thread count',
+    [{n:'spsc',v:P.map(r=>r.spsc.p50),dy:-6},{n:'mutex',v:P.map(r=>r.mutex.p50),dy:6},{n:'mutex_cv',v:P.map(r=>r.mutex_cv.p50)}],
+    P.map(r=>r.agents+' agents'),'agents on the machine (plus the engine and main threads)',ns);
+  // gen 0 split
+  const A=D.exp7.agents, names=Object.keys(A);
+  (function(){
+    const el=document.getElementById('chart-split'), W=880,H=270,m={l:74,r:150,t:14,b:40};
+    const rows=names.map(n=>({n,d:A[n][0].data,c:A[n][0].cpu})).sort((a,b)=>a.d+a.c-(b.d+b.c));
+    const hi=Math.max(...rows.map(r=>r.d+r.c))*1.06;
+    const X=v=>m.l+v/hi*(W-m.l-m.r), bh=30, gap=22;
+    let g=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Data path versus compute per agent">`;
+    ticks(0,hi,5).forEach(t=>g+=`<line x1="${X(t)}" x2="${X(t)}" y1="${m.t}" y2="${H-m.b}" stroke="var(--grid)"/><text x="${X(t)}" y="${H-m.b+16}" text-anchor="middle">${ns(t)}</text>`);
+    rows.forEach((r,i)=>{
+      const y=m.t+i*(bh+gap);
+      g+=`<text x="${m.l-10}" y="${y+20}" text-anchor="end" class="lbl">${r.n}</text>`;
+      g+=`<rect x="${X(0)}" y="${y}" width="${Math.max(1,X(r.d)-X(0))}" height="${bh}" rx="3" fill="var(--s2)"><title>data path ${ns(r.d)}</title></rect>`;
+      g+=`<rect x="${X(r.d)+2}" y="${y}" width="${Math.max(2,X(r.c)-X(0))}" height="${bh}" rx="3" fill="var(--s1)"><title>compute ${ns(r.c)}</title></rect>`;
+      g+=`<text class="lbl" x="${X(r.d+r.c)+12}" y="${y+20}">${ns(r.d+r.c)}</text>`;
+    });
+    g+=`<text x="${(m.l+W-m.r)/2}" y="${H-6}" text-anchor="middle">tick-to-trade p50</text></svg>`;
+    el.innerHTML=`<div class="head"><span class="title">Generation 0: data path versus compute</span><span class="legend"><span style="--sw:var(--s2)">data path</span><span style="--sw:var(--s1)">compute</span></span></div>${g}`;
+  })();
+  // trajectory
+  lines(document.getElementById('chart-traj'),'Tick-to-trade p50 by generation',
+    names.map((n,i)=>({n,v:A[n].map(r=>r.t2t),dy:(i-1.5)*7})),
+    ['gen 0','gen 1','gen 2'],'generation',ns);
+})();
+</script>
