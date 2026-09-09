@@ -24,6 +24,9 @@ struct AgentReport {
     double pnl = 0;
     uint64_t fills = 0;
     Qty volume = 0;
+    double fees = 0;            // signed; negative means net rebates earned
+    uint64_t maker_fills = 0;
+    uint64_t taker_fills = 0;
     uint64_t orders_processed = 0; // commands popped by the engine
     uint64_t orders_rejected = 0;  // by the book
     uint64_t events_dropped = 0;   // inbound queue full

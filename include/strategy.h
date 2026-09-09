@@ -94,6 +94,8 @@ public:
     // Position and cash as seen through this agent's own fill events.
     Qty position() const { return position_; }
     double cash() const { return cash_; }
+    // Venue fees this agent has paid so far, signed. Negative means net rebates.
+    double fees() const { return fees_; }
 
     // Last top of book seen. qty == 0 means empty side.
     Price bid_px() const { return bid_px_; }
@@ -135,6 +137,8 @@ public:
                 ++stats_.fills;
                 if (ev.side == Side::Buy) { position_ += ev.qty; cash_ -= to_dollars(ev.px) * ev.qty; }
                 else { position_ -= ev.qty; cash_ += to_dollars(ev.px) * ev.qty; }
+                cash_ -= ev.fee;      // negative fee is a rebate
+                fees_ += ev.fee;
                 break;
             case EventKind::Trade:
                 last_px_ = ev.px;
@@ -168,6 +172,7 @@ private:
     Ts t_event_ = 0;
     Qty position_ = 0;
     double cash_ = INITIAL_CASH;
+    double fees_ = 0;
     Price last_px_;
     Price bid_px_ = 0;
     Qty bid_qty_ = 0;

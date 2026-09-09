@@ -104,6 +104,7 @@ struct Event {
     Price px{0};
     Qty qty{0};
     Qty remaining{0};
+    double fee{0};     // Fill only: venue fee for this fill, signed (negative = rebate)
     // Top of book at publish time. qty == 0 means that side is empty.
     Price bid_px{0};
     Qty bid_qty{0};

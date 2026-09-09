@@ -17,6 +17,7 @@ CASES = (
     "engine_conservation",
     "engine_multicast",
     "engine_collar",
+    "engine_fees",
     "engine_shutdown_drain",
     "engine_matching_pair",
 )

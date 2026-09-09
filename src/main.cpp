@@ -21,6 +21,8 @@ void usage() {
         "  --idle MODE        agent idle policy: spin | yield | sleep (default yield)\n"
         "  --engine-idle MODE engine idle policy (default yield)\n"
         "  --pin              pin threads to cores (Linux only)\n"
+        "  --maker-fee F      venue fee per unit for resting liquidity, negative = rebate (default -0.002)\n"
+        "  --taker-fee F      venue fee per unit for taking liquidity (default 0.003)\n"
         "  --collar F         limit-up/limit-down: reject orders more than F of the initial price away (default 0.05, 0 = off)\n"
         "  --fanout MODE      broadcast path: spsc (one push per agent) | multicast (shared ring, default spsc)\n"
         "  --json PATH        write the report as JSON\n"
@@ -66,6 +68,8 @@ int main(int argc, char** argv) {
         else if (a == "--engine-idle") { if (!parse_idle(need("a mode"), cfg.engine_idle)) { std::cerr << "bad idle mode\n"; return 2; } }
         else if (a == "--pin") cfg.pin_threads = true;
         else if (a == "--collar") cfg.collar = std::stod(need("a fraction, 0 to disable"));
+        else if (a == "--maker-fee") cfg.maker_fee = std::stod(need("dollars per unit, negative = rebate"));
+        else if (a == "--taker-fee") cfg.taker_fee = std::stod(need("dollars per unit"));
         else if (a == "--fanout") {
             const std::string f = need("spsc|multicast");
             if (f == "spsc") cfg.fanout = Fanout::Spsc;
