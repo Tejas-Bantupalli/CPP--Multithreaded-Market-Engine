@@ -64,12 +64,21 @@ def agent_report(row, full=False):
             "_fees_note": "signed dollars: negative means you were paid rebates for resting liquidity",
         }
         out["your_latency_ns"] = {
-            "react_p50": round(row.get("react_p50_ns", 0)),
-            "react_p99": round(row.get("react_p99_ns", 0)),
-            "react_max": round(row.get("react_max_ns", 0)),
+            "tick_to_trade_p50": round(row.get("tick_to_trade_p50_ns", 0)),
+            "tick_to_trade_p99": round(row.get("tick_to_trade_p99_ns", 0)),
+            "tick_to_trade_max": round(row.get("tick_to_trade_max_ns", 0)),
+            "data_path_p50": round(row.get("delivery_p50_ns", 0)),
+            "data_path_p99": round(row.get("delivery_p99_ns", 0)),
+            "data_path_max": round(row.get("delivery_max_ns", 0)),
+            "compute_p50": round(row.get("react_p50_ns", 0)),
+            "compute_p99": round(row.get("react_p99_ns", 0)),
+            "compute_max": round(row.get("react_max_ns", 0)),
             "orders_measured": round(row.get("react_count_mean", 0)),
-            "_note": "nanoseconds from your on_event/on_idle call receiving an event to your order "
-                     "reaching the outbound queue. This is your own code's execution time.",
+            "_note": "Nanoseconds. tick_to_trade is the whole path: the engine publishing an event "
+                     "to your order landing in the outbound queue. It splits into data_path (the "
+                     "engine published it until your code got hold of it, i.e. your transport and "
+                     "how you wait on it) and compute (you got hold of it until you submitted, "
+                     "i.e. your own code). Whichever dominates is where your bottleneck is.",
         }
     return out
 
