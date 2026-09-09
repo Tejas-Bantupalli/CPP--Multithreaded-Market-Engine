@@ -24,6 +24,7 @@ struct EngineConfig {
     IdlePolicy agent_idle = IdlePolicy::Yield;
     IdlePolicy engine_idle = IdlePolicy::Yield;
     bool pin_threads = false;   // Linux only
+    QosClass qos = QosClass::Inherit;  // macOS: which core class threads ask for
     Fanout fanout = Fanout::Spsc;
     // Limit-up/limit-down: reject new orders priced more than this fraction away from
     // the initial price. 0 disables. Keeps a feedback loop between agents from
