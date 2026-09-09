@@ -14,6 +14,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 RUN_LABELS = {
+    "exp6_latency": ("Experiment 6", "Latency race. Venue fees, published matching rules, no rival information."),
     "exp5_freecode": ("Experiment 5", "Free code against a tuned champion. Four personas, rivals visible."),
     "exp3_code": ("Experiment 3", "Free code with market statistics only. Two personas."),
 }
@@ -84,7 +85,7 @@ def main():
     for i, it in enumerate(items):
         it["id"] = i
     total_lines = sum(it["lines"] for it in items)
-    runs_present = [r for r in ("exp5_freecode", "exp3_code") if any(i["run"] == r for i in items)]
+    runs_present = [r for r in ("exp6_latency", "exp5_freecode", "exp3_code") if any(i["run"] == r for i in items)]
     payload = json.dumps({"items": items, "labels": RUN_LABELS}, separators=(",", ":"))
 
     page = f"""<title>Agent Strategy Archive</title>
@@ -228,7 +229,7 @@ def main():
   // rail: group by run, then agent
   const rail = document.getElementById('rail');
   let html = '';
-  for (const run of ['exp5_freecode', 'exp3_code']) {{
+  for (const run of ['exp6_latency', 'exp5_freecode', 'exp3_code']) {{
     const mine = items.filter(i => i.run === run);
     if (!mine.length) continue;
     html += `<h2>${{labels[run] ? labels[run][0] : run}}</h2><p class="sub">${{labels[run] ? labels[run][1] : ''}}</p>`;

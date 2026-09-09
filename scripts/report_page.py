@@ -67,6 +67,7 @@ def main():
     e2 = {s: F[("exp2_persona", s)] for s in ("cautious", "aggressive", "maker")} if "exp2_persona" in runs else {}
     e3 = {s: F[("exp3_code", s)] for s in runs["exp3_code"]["subjects"]} if "exp3_code" in runs else {}
     e5 = {s: F[("exp5_freecode", s)] for s in runs["exp5_freecode"]["subjects"]} if "exp5_freecode" in runs else {}
+    e6 = {s: F[("exp6_latency", s)] for s in runs["exp6_latency"]["subjects"]} if "exp6_latency" in runs else {}
     ctrl = {r: [F[(r, s)] for s in runs[r]["subjects"]] for r in runs if r.startswith("ctrl_")}
     champ = None
     if "exp5_freecode" in runs:
@@ -172,9 +173,10 @@ def main():
 <main>
   <div class="eyebrow">CPP-Multithreaded-Market-Engine · experiment report · 2026-09-08</div>
   <h1>Adaptive Traders Report</h1>
-  <p class="lede prose">Language-model agents were dropped into a simulated market with nothing but a brief, and asked to pick a strategy, watch it trade, and try again. What they were allowed to know, who they were told they were, and which model they ran on all changed what they became.</p>
+  <p class="lede prose">Language-model agents were dropped into a simulated market with nothing but a brief, and asked to write a strategy, watch it trade, and try again. The last experiment is the one to read first: given a venue with a maker rebate, published matching rules, and no information about their competitors, they were never told that speed matters. Three of the four worked it out anyway.</p>
 
   <div class="lens">
+    <a href="#latency-race"><div class="who">Start here</div><div class="what">The latency question: agents given a rebate, published matching rules and no sight of rivals, never told that speed matters.</div></a>
     <a href="#trader"><div class="who">For the trader</div><div class="what">Did they make money, how, and what did the market do to them when they all found the same trade.</div></a>
     <a href="#engineer"><div class="who">For the engineer</div><div class="what">The C++ engine every session ran on: single-writer matching, lock-free queues, microsecond tails, and a plugin ABI for agent-written code.</div></a>
     <a href="#researcher"><div class="who">For the AI researcher</div><div class="what">Information level, persona, and model tier as experimental variables, with algorithmic controls on the same seeds.</div></a>
@@ -229,36 +231,70 @@ def main():
     </tbody>
   </table></div>
 
+
+  <!-- ===================================================== LATENCY -->
+  <h2 id="latency-race">The latency question</h2>
+  <p class="prose">Every experiment before this one gave agents a strategy problem. This one gives them an engineering problem and does not tell them so. Four agents write unconstrained C++. They see their own PnL, their own fills, their own venue fees, and their own reaction latency in nanoseconds. They see the public tape. They see nothing at all about their competitors, which is what a real desk sees. The venue rules are published the way an exchange publishes them: matching is price first then time, the timestamp is taken at submit, resting liquidity earns $0.002 a unit and taking it costs $0.003.</p>
+  <p class="prose">Nothing in the brief says to be fast. The question is whether they connect their own latency number to their fill rate on their own.</p>
+
+  <div class="tablewrap"><table>
+    <thead><tr><th>agent</th><th class="num">react p50, gen 0</th><th class="num">react p50, gen 1</th><th class="num">passive fills</th><th class="num">aggressive fills</th><th class="num">venue fees</th></tr></thead>
+    <tbody>
+      <tr><td>alpha</td><td class="num">288 ns</td><td class="num">124 ns</td><td class="num">108 &rarr; 3,505</td><td class="num">569 &rarr; 126</td><td class="num">+4.32 &rarr; -11.99</td></tr>
+      <tr><td>bravo</td><td class="num">208 ns</td><td class="num">348 ns</td><td class="num">2,727 &rarr; 100</td><td class="num">92 &rarr; 86</td><td class="num">-9.78 &rarr; +0.06</td></tr>
+      <tr><td>charlie</td><td class="num">328 ns</td><td class="num">208 ns</td><td class="num">0 &rarr; 0</td><td class="num">604 &rarr; 145</td><td class="num">+7.89 &rarr; +1.20</td></tr>
+      <tr><td>delta</td><td class="num">248 ns</td><td class="num">208 ns</td><td class="num">0 &rarr; 4,973</td><td class="num">433 &rarr; 84</td><td class="num">+4.19 &rarr; -18.75</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note">Negative fees are rebates earned. Three of four agents got faster between generations; alpha by 2.3x.</p>
+
+  <div class="finding"><div class="n">1</div><div>
+    <h3>Three of four read their own latency and reasoned about it, unprompted</h3>
+    <p class="prose">The interesting evidence is not the numbers, it is what the agents wrote in their own source comments before anyone asked them about speed.</p>
+    <p class="quote">Queue position. Matching is price first, then time, stamped at submit. &hellip; 288 ns p50 reaction is worth something. Everything in the hot path is &hellip;<br><span style="font-style:normal">&mdash; alpha, which then cut itself from 288 ns to 124 ns</span></p>
+    <p class="quote">LATENCY. react_p50 was 328 ns and react_max 854 ns, so my own code was never the constraint.<br><span style="font-style:normal">&mdash; charlie, correctly concluding that speed was not its binding problem</span></p>
+    <p class="quote">Three defences, all cheap enough for a ~250 ns react time.<br><span style="font-style:normal">&mdash; delta, budgeting its compute against its own measured latency</span></p>
+    <p class="prose">Alpha treated its latency as an asset to protect, charlie audited it and correctly ruled it out as its bottleneck, and delta used it as a compute budget when choosing how much logic to run per event. Only bravo ignored it, and bravo was the one agent that got slower.</p>
+  </div></div>
+
+  <div class="finding"><div class="n">2</div><div>
+    <h3>They found the economics of queue position before the engineering of latency</h3>
+    <p class="prose">The rebate changed behaviour immediately. In generation 0 three of the four were liquidity takers paying fees. In generation 1 three of the four were passive quoters earning rebates, and alpha and delta between them flipped from paying $8.51 a session to collecting $30.74. Alpha's reasoning is the clearest: it never cancels an order already at its target price, because re-posting sends it to the back of the queue. That is a time-priority insight derived from published rules, with no sight of a single competitor.</p>
+    <p class="prose">The honest reading of two generations is that the latency gains were real but partly a side effect. Passive quoting logic is simpler than signal-driven taking, so code that stops chasing signals gets faster whether or not that was the intent. What is not a side effect is that three agents put their own latency in writing as a factor in the decision.</p>
+  </div></div>
+
+  <p class="note">Experiment 6 ran two of a planned six generations before the account session limit stopped it. Two generations is enough to show that agents engage with their own latency telemetry and not enough to show where an arms race would end. That is the obvious next run.</p>
+
   <!-- ===================================================== TRADER -->
   <h2 id="trader">For the trader</h2>
 
-  <div class="finding"><div class="n">1</div><div>
+  <div class="finding"><div class="n">3</div><div>
     <h3>Every agent that survived became a market maker</h3>
     <p class="prose">The background flow is informed: noise traders take liquidity when their private view of value crosses the touch. Agents that started with momentum or mean reversion paid the spread on every trade for a signal that was mostly noise at a two-second horizon. Within two to five generations, all of them stopped taking and started quoting.</p>
     <figure><div class="fig" id="strip-strategies"></div>
     <figcaption><b>Strategy chosen by each agent, generation by generation.</b> Columns are generations. By the end, every parameter-space agent is quoting a two-tick half spread, and the code-writing agents had rewritten themselves into passive quoters or jump-only traders.</figcaption></figure>
   </div></div>
 
-  <div class="finding"><div class="n">2</div><div>
+  <div class="finding"><div class="n">4</div><div>
     <h3>The one-tick quote is a trap, and it was sprung twice</h3>
     <p class="prose">Two different agents in two different markets tried to undercut the incumbent maker with a one-tick half spread. Both were filled almost exclusively by informed flow and lost heavily: {fmt(runs['exp1_info']['subjects']['rivals']['curve'][0]['score']) if 'exp1_info' in runs else 'n/a'} in experiment 1 and {fmt(next((c['score'] for c in runs['exp2_persona']['subjects']['maker']['curve'] if 'spread=1' in (c['spec'] or '')), float('nan'))) if 'exp2_persona' in runs else 'n/a'} in experiment 2, each on every seed. The two-tick quote was the only width that both rested at the touch and paid. Three ticks and wider got no fills. This is adverse selection measured, not described.</p>
   </div></div>
 
-  <div class="finding"><div class="n">3</div><div>
+  <div class="finding"><div class="n">5</div><div>
     <h3>When everyone found the trade, the trade stopped paying</h3>
     <p class="prose">In the persona experiment all three agents could see each other. The market-making specialist earned {fmt(e2['maker']['first']) if e2 else 'n/a'} with a perfect hit rate in generation 0. By generation 1 the other two had copied it, and by generation 3 four makers sat on the same touch and the specialist's profit had fallen to {fmt(runs['exp2_persona']['subjects']['maker']['curve'][3]['score']) if e2 else 'n/a'}. The equilibrium a trader would predict from first principles arrived in three rounds.</p>
     <figure><div class="fig" id="chart-exp2"></div>
     <figcaption><b>Experiment 2, mean PnL per generation.</b> Cautious, aggressive and specialist personas, all seeing rivals. The spike and collapse of the specialist is crowding, not luck: its own parameters barely changed between the peak and the trough.</figcaption></figure>
   </div></div>
 
-  <div class="finding"><div class="n">4</div><div>
+  <div class="finding"><div class="n">6</div><div>
     <h3>Agents that could write code rediscovered the same lesson at ten times the cost</h3>
     <p class="prose">Given the C++ interface instead of a catalogue, both coding agents produced compilable strategies on the first attempt, and both lost about {fmt(statistics.fmean(v['first'] for v in e3.values())) if e3 else 'n/a'} per session by trading thousands of times into the spread. Their revisions cut the churn by an order of magnitude each generation. {('Neither reached the profitability of the parameter-space agents within ' + str(max(v['n'] for v in e3.values())) + ' generations.') if e3 and all(v['tail'] < 1 for v in e3.values()) else ('One reached profitability by the end.' if e3 and any(v['tail'] >= 1 for v in e3.values()) else '')}</p>
     <figure><div class="fig" id="chart-exp3"></div>
     <figcaption><b>Experiment 3, mean PnL per generation for the two code-writing agents.</b> Fills per session fell from thousands to hundreds as the agents diagnosed the spread cost from their own reports.</figcaption></figure>
   </div></div>
 
-  {"" if "exp5_freecode" not in runs else f'''<div class="finding"><div class="n">8</div><div>
+  {"" if "exp5_freecode" not in runs else f'''<div class="finding"><div class="n">7</div><div>
     <h3>Free code against a tuned champion, and the oscillation they built</h3>
     <p class="prose">Four agents writing C++ from scratch, each with a different persona and full sight of every rival, in a market that also contained the best market maker evolved in experiment 4. All four compiled on the first attempt. Three of them read the same sentence in their brief, that the latent value occasionally jumps and trends follow, and independently wrote jump chasers.</p>
     <p class="prose">For 35 milliseconds the market was ordinary, holding within six cents of par. Then all three chasers took their first position inside a 4.4 millisecond window. They were watching the same thing, so one ordinary move fired all of them at once, and their combined size exceeded the liquidity quoted against it. The price therefore moved, which was the signal that had triggered them. Distance from par then doubled roughly every 10 milliseconds, from $0.06 to $0.85, $1.22, $2.49, $2.79, and past the 5% band at 81 ms.</p>
@@ -299,21 +335,21 @@ def main():
   <!-- ===================================================== RESEARCHER -->
   <h2 id="researcher">For the AI researcher</h2>
 
-  <div class="finding"><div class="n">5</div><div>
+  <div class="finding"><div class="n">8</div><div>
     <h3>More context found the answer faster, not better</h3>
     <p class="prose">Three Opus agents with identical priors and different reports. The one that saw rivals reached a profitable, high-hit-rate configuration at {gen_or(e1['rivals']['first_profit']) if e1 else 'n/a'}, the one that saw market statistics at {gen_or(e1['market']['first_profit']) if e1 else 'n/a'}, and the one that saw only its own PnL at {gen_or(e1['own']['first_profit']) if e1 else 'n/a'}. All three ended in the same place: two-tick market making with tight inventory limits, final scores {fmt(e1['own']['last']) if e1 else ''}, {fmt(e1['market']['last']) if e1 else ''} and {fmt(e1['rivals']['last']) if e1 else ''}. Information changed the path, not the destination. It also changed the cost of the path: the rivals-informed agent's first move was the one-tick undercut, the most expensive mistake in the whole study.</p>
     <figure><div class="fig" id="chart-exp1"></div>
     <figcaption><b>Experiment 1, mean PnL per generation by context level.</b> The own-only agent switched strategy class twice before settling; the others once.</figcaption></figure>
   </div></div>
 
-  <div class="finding"><div class="n">6</div><div>
+  <div class="finding"><div class="n">9</div><div>
     <h3>Model tier separated cleanly, and only the largest model kept improving</h3>
     <p class="prose">Same brief, same context, three model tiers. Opus went from {fmt(e4['opus']['first']) if e4 else ''} to {fmt(e4['opus']['last']) if e4 else ''} with a perfect hit rate over the last third of the run. Sonnet found a good configuration in generation 0 ({fmt(e4['sonnet']['first']) if e4 else ''}), then drifted away from it and never got back. Haiku switched between momentum, mean reversion and market making and finished at {fmt(e4['haiku']['last']) if e4 else ''}. The rationales tell the same story: the larger model reasoned about per-unit edge and inventory carried into jumps; the smaller one reasoned about which generation had the best number.</p>
     <figure><div class="fig" id="chart-exp4"></div>
     <figcaption><b>Experiment 4, mean PnL per generation by model.</b> All three see only their own results.</figcaption></figure>
   </div></div>
 
-  <div class="finding"><div class="n">7</div><div>
+  <div class="finding"><div class="n">10</div><div>
     <h3>Against algorithmic controls on the same seeds</h3>
     <p class="prose">Three rules that need no model ran the same eight generations with the same seeds and background. Hill climbing on own history crept from about -9 to break-even. The bandit kept switching classes and never settled. The imitation rule copied the market maker, crowded its own quotes, and collapsed. The model agents' average score over the last third of their runs was {fmt(statistics.fmean(llm_tails)) if llm_tails else 'n/a'} against {', '.join(f"{r.replace('ctrl_', '')} {fmt(v)}" for r, v in ctrl_tails.items())}. The difference is not raw search power. It is that the model agents read the fills column, inferred adverse selection, and stopped doing the thing that lost money, while the rules could only perturb.</p>
     <figure><div class="fig" id="chart-controls"></div>
