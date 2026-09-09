@@ -47,20 +47,38 @@ def spec_of(proposal):
     return to_spec(proposal.strategy, proposal.params)
 
 
-def agent_report(row):
+def agent_report(row, full=False):
+    """`full` adds the agent's own execution and latency telemetry: things a real desk
+    measures about itself. Rival rows never get it."""
     p = row["pnl"]
-    return {
+    out = {
         "mean_pnl": round(p["mean"], 2), "std_pnl": round(p["std"], 2), "median_pnl": round(p["median"], 2),
         "min_pnl": round(p["min"], 2), "max_pnl": round(p["max"], 2), "hit_rate": round(p["hit_rate"], 2),
         "fills_per_session": round(row["fills_mean"], 1), "volume_per_session": round(row["volume_mean"], 1),
     }
+    if full:
+        out["execution"] = {
+            "passive_fills_per_session": round(row.get("maker_fills_mean", 0), 1),
+            "aggressive_fills_per_session": round(row.get("taker_fills_mean", 0), 1),
+            "venue_fees_per_session": round(row.get("fees_mean", 0), 3),
+            "_fees_note": "signed dollars: negative means you were paid rebates for resting liquidity",
+        }
+        out["your_latency_ns"] = {
+            "react_p50": round(row.get("react_p50_ns", 0)),
+            "react_p99": round(row.get("react_p99_ns", 0)),
+            "react_max": round(row.get("react_max_ns", 0)),
+            "orders_measured": round(row.get("react_count_mean", 0)),
+            "_note": "nanoseconds from your on_event/on_idle call receiving an event to your order "
+                     "reaching the outbound queue. This is your own code's execution time.",
+        }
+    return out
 
 
 def build_report(info, subject_idx, summary, runs, specs):
     """What one subject gets to see. `specs` is the full agent spec list by id."""
     rows = summary["agents"]
     me = rows[subject_idx]
-    report = {"you": agent_report(me)}
+    report = {"you": agent_report(me, full=True)}
     if info in ("market", "rivals"):
         e = summary["engine"]
         price_moves = [r["last_px"] - r["initial_px"] for r in runs]

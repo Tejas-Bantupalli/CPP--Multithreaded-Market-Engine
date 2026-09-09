@@ -63,12 +63,22 @@ def summarise(reports):
     for r in reports:
         for a in r["agents"]:
             key = (a["id"], a["name"])
-            agents.setdefault(key, {"pnl": [], "fills": [], "volume": [], "events_dropped": [], "queue_full": []})
+            agents.setdefault(key, {"pnl": [], "fills": [], "volume": [], "events_dropped": [], "queue_full": [],
+                                    "fees": [], "maker_fills": [], "taker_fills": [],
+                                    "react_p50": [], "react_p99": [], "react_max": [], "react_count": []})
             agents[key]["pnl"].append(a["pnl"])
             agents[key]["fills"].append(a["fills"])
             agents[key]["volume"].append(a["volume"])
             agents[key]["events_dropped"].append(a["events_dropped"])
             agents[key]["queue_full"].append(a["queue_full"])
+            agents[key]["fees"].append(a.get("fees", 0.0))
+            agents[key]["maker_fills"].append(a.get("maker_fills", 0))
+            agents[key]["taker_fills"].append(a.get("taker_fills", 0))
+            rl = a["latency"]["react"]
+            agents[key]["react_p50"].append(rl["p50"])
+            agents[key]["react_p99"].append(rl["p99"])
+            agents[key]["react_max"].append(rl["max"])
+            agents[key]["react_count"].append(rl["count"])
 
     def stats(xs):
         return {
@@ -90,6 +100,13 @@ def summarise(reports):
             "volume_mean": statistics.fmean(d["volume"]),
             "events_dropped_total": sum(d["events_dropped"]),
             "queue_full_total": sum(d["queue_full"]),
+            "fees_mean": statistics.fmean(d["fees"]),
+            "maker_fills_mean": statistics.fmean(d["maker_fills"]),
+            "taker_fills_mean": statistics.fmean(d["taker_fills"]),
+            "react_p50_ns": statistics.median(d["react_p50"]),
+            "react_p99_ns": statistics.median(d["react_p99"]),
+            "react_max_ns": statistics.median(d["react_max"]),
+            "react_count_mean": statistics.fmean(d["react_count"]),
         })
 
     engine = {

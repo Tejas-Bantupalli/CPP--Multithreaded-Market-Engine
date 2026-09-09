@@ -56,7 +56,14 @@ MARKET_DESCRIPTION = (
     "that random-walks and occasionally jumps by tens of ticks; they post limit orders around their private view "
     "of it and take liquidity when their view crosses the touch. Trends appear after jumps; between jumps the "
     "mid wanders around the true value. Crossing the spread costs roughly the market maker's half spread per unit. "
-    "Each agent starts with $100,000 cash and zero inventory; PnL is marked to the final mid."
+    "Each agent starts with $100,000 cash and zero inventory; PnL is marked to the final mid.\n\n"
+    "VENUE RULES (public, the same for every participant):\n"
+    "- Matching is price first, then time. Among orders at the same price, the one the engine received "
+    "earliest trades first. Your order's timestamp is taken when you submit it, not when it is matched.\n"
+    "- Resting liquidity that gets filled earns a rebate of $0.002 per unit. Taking liquidity costs $0.003 "
+    "per unit. These land in your cash and are reported back to you on each fill.\n"
+    "- Orders priced more than 5% away from the opening price are rejected.\n"
+    "- Order quantity beyond what the book can match is either rested (GTC) or discarded (IOC)."
 )
 
 
