@@ -3,6 +3,7 @@
 #include "histogram.h"
 #include "multicast_ring.h"
 #include "spsc_queue.h"
+#include "transport.h"
 #include "types.h"
 
 #include <atomic>
@@ -42,7 +43,7 @@ struct AgentStats {
 // agent's thread only.
 class AgentContext {
 public:
-    AgentContext(AgentId id, SPSCQueue<Command, QCAP>& out, SPSCQueue<Event, QCAP>& in,
+    AgentContext(AgentId id, Channel<Command>& out, Channel<Event>& in,
                  Price initial_px, uint64_t seed, uint64_t market_seed)
         : id_(id), out_(out), in_(in), last_px_(initial_px), rng_(seed), market_seed_(market_seed) {}
 
@@ -69,7 +70,7 @@ public:
         c.qty = qty;
         c.t_decide = t_dispatch_;
         c.t_submit = now_ns();
-        if (!out_.try_push(c)) { ++stats_.queue_full; return 0; }
+        if (!out_.push(c)) { ++stats_.queue_full; return 0; }
         ++stats_.submitted;
         if (t_dispatch_) {
             stats_.react.record(c.t_submit - t_dispatch_);
@@ -85,7 +86,7 @@ public:
         c.id = id;
         c.t_decide = t_dispatch_;
         c.t_submit = now_ns();
-        if (!out_.try_push(c)) { ++stats_.queue_full; return false; }
+        if (!out_.push(c)) { ++stats_.queue_full; return false; }
         ++stats_.submitted;
         ++stats_.cancels_sent;
         return true;
@@ -123,9 +124,15 @@ public:
 
     // Private events first, then broadcasts from the ring when one is attached.
     bool poll(Event& ev) {
-        if (in_.try_pop(ev)) return true;
+        if (in_.pop(ev)) return true;
         return ring_ && ring_->try_read(reader_, ev);
     }
+
+    // Let a blocking transport park the thread instead of the runner spinning.
+    // Never used when a multicast ring is attached, since that ring is polled.
+    bool transport_blocks() const { return in_.blocking() && ring_ == nullptr; }
+    bool wait_poll(Event& ev, int64_t timeout_ns) { return in_.wait_pop(ev, timeout_ns); }
+    const char* transport_name() const { return in_.name(); }
 
     void dispatch(const Event& ev, Strategy& s) {
         t_dispatch_ = now_ns();
@@ -165,8 +172,8 @@ private:
     }
 
     AgentId id_;
-    SPSCQueue<Command, QCAP>& out_;
-    SPSCQueue<Event, QCAP>& in_;
+    Channel<Command>& out_;
+    Channel<Event>& in_;
     uint64_t local_seq_ = 0;
     Ts t_dispatch_ = 0;
     Ts t_event_ = 0;

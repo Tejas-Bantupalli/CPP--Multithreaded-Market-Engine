@@ -24,6 +24,7 @@ struct AgentReport {
     double pnl = 0;
     uint64_t fills = 0;
     Qty volume = 0;
+    std::string transport;      // which plumbing this agent's channels used
     double fees = 0;            // signed; negative means net rebates earned
     uint64_t maker_fills = 0;
     uint64_t taker_fills = 0;
@@ -37,6 +38,7 @@ struct AgentReport {
     uint64_t queue_full = 0;
     uint64_t cancels_sent = 0;
     uint64_t events = 0;
+    uint64_t events_sent = 0;   // addressed by the engine; events is what the agent consumed
     LatencySummary delivery, react, event_age, submit_to_pop;
 };
 

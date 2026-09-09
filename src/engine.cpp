@@ -42,8 +42,9 @@ void idle(IdlePolicy p) {
 struct Engine::Slot {
     AgentId id;
     std::unique_ptr<Strategy> strategy;
-    SPSCQueue<Command, QCAP> in;  // agent -> engine
-    SPSCQueue<Event, QCAP> out;   // engine -> agent
+    TransportKind transport;
+    std::unique_ptr<Channel<Command>> in;   // agent -> engine
+    std::unique_ptr<Channel<Event>> out;    // engine -> agent
     AgentContext ctx;
     std::thread thread;
     // Engine-side truth. Single writer: the engine thread.
@@ -57,10 +58,14 @@ struct Engine::Slot {
     uint64_t orders_processed = 0;
     uint64_t orders_rejected = 0;
     uint64_t events_dropped = 0;
+    uint64_t events_sent = 0;     // events the engine addressed to this agent
     Histogram submit_to_pop;
 
-    Slot(AgentId i, std::unique_ptr<Strategy> s, Price px, uint64_t seed, uint64_t market_seed)
-        : id(i), strategy(std::move(s)), ctx(i, in, out, px, seed, market_seed) {}
+    Slot(AgentId i, std::unique_ptr<Strategy> s, Price px, uint64_t seed, uint64_t market_seed,
+         TransportKind t)
+        : id(i), strategy(std::move(s)), transport(t),
+          in(make_channel<Command>(t)), out(make_channel<Event>(t)),
+          ctx(i, *in, *out, px, seed, market_seed) {}
 };
 
 // ===================== Engine-thread state =====================
@@ -103,10 +108,14 @@ Engine::Engine(EngineConfig cfg) : cfg_(std::move(cfg)), impl_(std::make_unique<
 Engine::~Engine() = default;
 
 AgentId Engine::add_agent(std::unique_ptr<Strategy> s) {
+    return add_agent(std::move(s), cfg_.transport);
+}
+
+AgentId Engine::add_agent(std::unique_ptr<Strategy> s, TransportKind t) {
     if (running_.load()) throw std::logic_error("add_agent during run");
     const AgentId id = static_cast<AgentId>(slots_.size());
     const uint64_t seed = cfg_.seed * 1000003ULL + id * 7919ULL + 1;
-    slots_.push_back(std::make_unique<Slot>(id, std::move(s), cfg_.initial_px, seed, cfg_.seed));
+    slots_.push_back(std::make_unique<Slot>(id, std::move(s), cfg_.initial_px, seed, cfg_.seed, t));
     return id;
 }
 
@@ -125,10 +134,13 @@ void Engine::broadcast(Event ev) {
     ++impl_->events_published;
     if (impl_->ring) {
         impl_->ring->publish(ev); // one write, every agent reads it
+        for (auto& s : slots_) ++s->events_sent;
         return;
     }
-    for (auto& s : slots_)
-        if (!s->out.try_push(ev)) ++s->events_dropped;
+    for (auto& s : slots_) {
+        ++s->events_sent;
+        if (!s->out->push(ev)) ++s->events_dropped;
+    }
 }
 
 void Engine::send(AgentId to, Event ev) {
@@ -136,7 +148,8 @@ void Engine::send(AgentId to, Event ev) {
     ev.ts = now_ns();
     ++impl_->events_published;
     Slot& s = *slots_[to];
-    if (!s.out.try_push(ev)) ++s.events_dropped;
+    ++s.events_sent;
+    if (!s.out->push(ev)) ++s.events_dropped;
 }
 
 // ===================== Command processing =====================
@@ -295,7 +308,7 @@ void Engine::engine_loop() {
             Slot& s = *slots_[(rr + i) % n];
             Command c;
             int pops = 0;
-            while (pops < 256 && s.in.try_pop(c)) {
+            while (pops < 256 && s.in->pop(c)) {
                 s.submit_to_pop.record(now_ns() - c.t_submit);
                 batch.push_back(c);
                 ++pops;
@@ -337,6 +350,11 @@ void Engine::engine_loop() {
 void Engine::agent_loop(Slot& s) {
     if (cfg_.pin_threads) pin_to(2 + static_cast<int>(s.id));
     s.strategy->on_start(s.ctx);
+    // A blocking transport parks the thread rather than burning the idle policy.
+    // The timeout keeps on_idle running so timer-driven strategies still tick,
+    // which is what a real event loop with timers does.
+    const bool parks = s.ctx.transport_blocks();
+    constexpr int64_t PARK_NS = 50000;  // 50 us
     Event ev;
     while (running_.load(std::memory_order_relaxed)) {
         int n = 0;
@@ -346,7 +364,11 @@ void Engine::agent_loop(Slot& s) {
         }
         if (n == 0) {
             s.strategy->on_idle(s.ctx);
-            idle(cfg_.agent_idle);
+            if (parks) {
+                if (s.ctx.wait_poll(ev, PARK_NS)) s.ctx.dispatch(ev, *s.strategy);
+            } else {
+                idle(cfg_.agent_idle);
+            }
         }
     }
 }
@@ -418,6 +440,8 @@ RunReport Engine::build_report(Ts t_start, Ts t_end) {
         a.pnl = s.cash + to_dollars(r.mark_px) * s.position - INITIAL_CASH;
         a.fills = s.fills;
         a.volume = s.volume;
+        a.transport = transport_name(s.transport);
+        a.events_sent = s.events_sent;
         a.fees = s.fees;
         a.maker_fills = s.maker_fills;
         a.taker_fills = s.taker_fills;
