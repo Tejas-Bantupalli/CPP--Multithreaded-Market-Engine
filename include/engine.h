@@ -1,6 +1,7 @@
 #pragma once
 
 #include "report.h"
+#include "transport.h"
 #include "strategy.h"
 #include "types.h"
 
@@ -33,6 +34,7 @@ struct EngineConfig {
     // rebate paid to the agent, positive is a fee charged. Real venues pay resting
     // liquidity and charge liquidity takers, which is what makes queue position
     // worth money and therefore what makes speed pay.
+    TransportKind transport = TransportKind::Spsc;  // default for agents added without one
     double maker_fee = -0.002;
     double taker_fee = 0.003;
     std::string trade_log;      // CSV path or empty
@@ -47,6 +49,8 @@ public:
 
     // Register before run(). Returns the agent id.
     AgentId add_agent(std::unique_ptr<Strategy> s);
+    // Same, but this agent's private channels use the given plumbing.
+    AgentId add_agent(std::unique_ptr<Strategy> s, TransportKind t);
     size_t agent_count() const { return slots_.size(); }
 
     // Blocks for the session, shuts down cleanly, returns the report.

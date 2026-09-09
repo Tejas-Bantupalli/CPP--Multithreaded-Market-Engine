@@ -3,6 +3,7 @@
 #include "multicast_ring.h"
 #include "order_book.h"
 #include "spsc_queue.h"
+#include "transport.h"
 #include "strategies.h"
 
 #include <atomic>
@@ -215,6 +216,52 @@ void multicast_ring() {
     }
 }
 
+
+// ---------- transports ----------
+// Every variant must behave identically as a queue. Only its cost differs.
+void transport_channels() {
+    for (TransportKind k : {TransportKind::Spsc, TransportKind::Mutex, TransportKind::MutexCv}) {
+        auto ch = make_channel<Command>(k);
+        Command c;
+        CHECK(!ch->pop(c));                       // empty
+        for (int i = 1; i <= 100; ++i) {
+            Command in = make(1, static_cast<OrderId>(i), Side::Buy, 100, i);
+            CHECK(ch->push(in));
+        }
+        for (int i = 1; i <= 100; ++i) {          // strict FIFO
+            CHECK(ch->pop(c) && c.id == static_cast<OrderId>(i) && c.qty == i);
+        }
+        CHECK(!ch->pop(c));
+        // Every variant must hold the same depth: fill it, then the next push is
+        // refused rather than blocking or growing.
+        size_t depth = 0;
+        while (ch->push(make(1, depth + 1, Side::Buy, 100, 1))) ++depth;
+        CHECK(depth == QCAP - 1);
+        CHECK(ch->pop(c));                        // one slot freed
+        CHECK(ch->push(make(1, 999999, Side::Buy, 100, 1)));
+        CHECK(std::string(ch->name()) == transport_name(k));
+    }
+    // Only the condition-variable transport parks the consumer.
+    CHECK(!make_channel<Event>(TransportKind::Spsc)->blocking());
+    CHECK(!make_channel<Event>(TransportKind::Mutex)->blocking());
+    CHECK(make_channel<Event>(TransportKind::MutexCv)->blocking());
+
+    // wait_pop must time out on an empty channel and wake on a push.
+    {
+        auto ch = make_channel<Event>(TransportKind::MutexCv);
+        Event ev;
+        const Ts t0 = now_ns();
+        CHECK(!ch->wait_pop(ev, 2000000));        // 2 ms, nothing arrives
+        CHECK(now_ns() - t0 >= 1000000);          // it really waited
+        std::thread producer([&] {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            Event e; e.kind = EventKind::Trade; e.px = 12345; ch->push(e);
+        });
+        CHECK(ch->wait_pop(ev, 500000000) && ev.px == 12345);
+        producer.join();
+    }
+}
+
 // ---------- engine ----------
 EngineConfig short_cfg(double seconds) {
     EngineConfig c;
@@ -231,7 +278,11 @@ void conservation_with(EngineConfig cfg) {
     double cash = 0; long long pos = 0; uint64_t processed = 0, submitted = 0;
     for (const AgentReport& a : r.agents) {
         cash += a.cash; pos += a.position; processed += a.orders_processed; submitted += a.submitted;
-        if (a.events_dropped == 0) {
+        // An agent's own books match the engine's only if it consumed every event
+        // addressed to it. The engine drains queued commands after agents have
+        // exited, so a session tail can leave fills the agent never saw; a slower
+        // transport leaves more of them.
+        if (a.events_dropped == 0 && a.events == a.events_sent) {
             CHECK(a.agent_position == a.position);
             CHECK(std::fabs(a.agent_cash - a.cash) < 1e-6);
         }
@@ -247,6 +298,39 @@ void conservation_with(EngineConfig cfg) {
 }
 
 void engine_conservation() { conservation_with(short_cfg(0.4)); }
+
+// The plumbing must not change what the market does, only what it costs.
+void engine_transport_mutex() {
+    EngineConfig cfg = short_cfg(0.4);
+    cfg.transport = TransportKind::Mutex;
+    conservation_with(cfg);
+}
+
+void engine_transport_mutex_cv() {
+    EngineConfig cfg = short_cfg(0.4);
+    cfg.transport = TransportKind::MutexCv;
+    conservation_with(cfg);
+}
+
+// Mixed plumbing in one market: this is the comparison the benchmark relies on.
+void engine_transport_mixed() {
+    EngineConfig cfg = short_cfg(0.4);
+    Engine e(cfg);
+    const TransportKind ks[3] = {TransportKind::Spsc, TransportKind::Mutex, TransportKind::MutexCv};
+    e.add_agent(make_strategy("mm", Params{}), ks[0]);
+    e.add_agent(make_strategy("noise", Params{}), ks[1]);
+    e.add_agent(make_strategy("noise", Params{}), ks[2]);
+    const RunReport r = e.run();
+    CHECK(r.trades > 0);
+    for (int i = 0; i < 3; ++i) {
+        CHECK(r.agents[i].transport == transport_name(ks[i]));
+        CHECK(r.agents[i].orders_processed > 0);       // every transport delivered work
+        CHECK(r.agents[i].react.count > 0);            // and agent reacted to events
+    }
+    double cash = 0, fees = 0;
+    for (const AgentReport& a : r.agents) { cash += a.cash; fees += a.fees; }
+    CHECK(std::fabs((cash + fees) - INITIAL_CASH * r.agents.size()) < 1e-6);
+}
 
 void engine_multicast() {
     EngineConfig cfg = short_cfg(0.4);
@@ -380,6 +464,10 @@ int main(int argc, char** argv) {
         else if (name == "histogram") histogram();
         else if (name == "spsc_wraparound") spsc_wraparound();
         else if (name == "engine_conservation") engine_conservation();
+        else if (name == "transport_channels") transport_channels();
+        else if (name == "engine_transport_mutex") engine_transport_mutex();
+        else if (name == "engine_transport_mutex_cv") engine_transport_mutex_cv();
+        else if (name == "engine_transport_mixed") engine_transport_mixed();
         else if (name == "engine_multicast") engine_multicast();
         else if (name == "engine_collar") engine_collar();
         else if (name == "engine_fees") engine_fees();

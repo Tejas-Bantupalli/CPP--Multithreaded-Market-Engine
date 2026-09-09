@@ -74,13 +74,13 @@ void print_report(const RunReport& r, std::ostream& os) {
        << " | log dropped trades/cmds: " << r.log_dropped_trades << "/" << r.log_dropped_cmds << "\n";
 
     os << "\n=== PNL (mark @ " << std::setprecision(2) << to_dollars(r.mark_px) << ") ===\n";
-    os << "  " << std::left << std::setw(4) << "id" << std::setw(12) << "strategy" << std::right
+    os << "  " << std::left << std::setw(4) << "id" << std::setw(12) << "strategy" << std::setw(10) << "transport" << std::right
        << std::setw(12) << "pnl" << std::setw(8) << "pos" << std::setw(14) << "cash"
        << std::setw(8) << "fills" << std::setw(7) << "mkr" << std::setw(7) << "tkr" << std::setw(9) << "fees"
        << std::setw(8) << "volume" << std::setw(10) << "orders"
        << std::setw(8) << "rej" << std::setw(9) << "q_full" << std::setw(9) << "ev_drop" << "\n";
     for (const AgentReport& a : r.agents) {
-        os << "  " << std::left << std::setw(4) << a.id << std::setw(12) << a.name << std::right
+        os << "  " << std::left << std::setw(4) << a.id << std::setw(12) << a.name << std::setw(10) << a.transport << std::right
            << std::setw(12) << std::setprecision(2) << a.pnl
            << std::setw(8) << a.position
            << std::setw(14) << a.cash
@@ -144,11 +144,11 @@ std::string to_json(const RunReport& r) {
         o << "    {\"id\": " << a.id << ", \"name\": " << json_str(a.name)
           << ", \"pnl\": " << a.pnl << ", \"position\": " << a.position << ", \"cash\": " << a.cash
           << ", \"fills\": " << a.fills << ", \"volume\": " << a.volume
-          << ", \"fees\": " << a.fees << ", \"maker_fills\": " << a.maker_fills
+          << ", \"transport\": " << json_str(a.transport) << ", \"fees\": " << a.fees << ", \"maker_fills\": " << a.maker_fills
           << ", \"taker_fills\": " << a.taker_fills
           << ", \"orders_processed\": " << a.orders_processed << ", \"orders_rejected\": " << a.orders_rejected
           << ", \"submitted\": " << a.submitted << ", \"queue_full\": " << a.queue_full
-          << ", \"cancels_sent\": " << a.cancels_sent << ", \"events\": " << a.events
+          << ", \"cancels_sent\": " << a.cancels_sent << ", \"events\": " << a.events << ", \"events_sent\": " << a.events_sent
           << ", \"events_dropped\": " << a.events_dropped
           << ", \"agent_position\": " << a.agent_position << ", \"agent_cash\": " << a.agent_cash
           << ",\n     \"latency\": {\"delivery\": " << lat_json(a.delivery)

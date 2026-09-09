@@ -21,6 +21,8 @@ void usage() {
         "  --idle MODE        agent idle policy: spin | yield | sleep (default yield)\n"
         "  --engine-idle MODE engine idle policy (default yield)\n"
         "  --pin              pin threads to cores (Linux only)\n"
+        "  --transport MODE   agent<->engine plumbing: spsc | mutex | mutex_cv (default spsc).\n"
+        "                     Override per agent with transport=MODE inside its spec.\n"
         "  --maker-fee F      venue fee per unit for resting liquidity, negative = rebate (default -0.002)\n"
         "  --taker-fee F      venue fee per unit for taking liquidity (default 0.003)\n"
         "  --collar F         limit-up/limit-down: reject orders more than F of the initial price away (default 0.05, 0 = off)\n"
@@ -68,6 +70,11 @@ int main(int argc, char** argv) {
         else if (a == "--engine-idle") { if (!parse_idle(need("a mode"), cfg.engine_idle)) { std::cerr << "bad idle mode\n"; return 2; } }
         else if (a == "--pin") cfg.pin_threads = true;
         else if (a == "--collar") cfg.collar = std::stod(need("a fraction, 0 to disable"));
+        else if (a == "--transport") {
+            if (!parse_transport(need("spsc|mutex|mutex_cv"), cfg.transport)) {
+                std::cerr << "bad transport (spsc, mutex, mutex_cv)\n"; return 2;
+            }
+        }
         else if (a == "--maker-fee") cfg.maker_fee = std::stod(need("dollars per unit, negative = rebate"));
         else if (a == "--taker-fee") cfg.taker_fee = std::stod(need("dollars per unit"));
         else if (a == "--fanout") {
@@ -99,6 +106,13 @@ int main(int argc, char** argv) {
         std::string name;
         Params params;
         if (!parse_agent_spec(as.spec, name, params)) { std::cerr << "bad agent spec: " << as.spec << "\n"; return 2; }
+        // transport= selects this agent's plumbing; it is not a strategy parameter.
+        TransportKind tk = cfg.transport;
+        auto it = params.kv.find("transport");
+        if (it != params.kv.end()) {
+            if (!parse_transport(it->second, tk)) { std::cerr << "bad transport: " << it->second << "\n"; return 2; }
+            params.kv.erase(it);
+        }
         for (const auto& kv : market.kv) params.kv.emplace(kv.first, kv.second);
         std::unique_ptr<Strategy> s;
         if (as.plugin) {
@@ -109,7 +123,7 @@ int main(int argc, char** argv) {
             s = make_strategy(name, params);
             if (!s) { std::cerr << "unknown strategy: " << name << "\n"; return 2; }
         }
-        engine.add_agent(std::move(s));
+        engine.add_agent(std::move(s), tk);
     }
 
     const RunReport r = engine.run();
