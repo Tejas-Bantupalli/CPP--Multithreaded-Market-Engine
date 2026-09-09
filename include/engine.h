@@ -10,7 +10,6 @@
 #include <string>
 #include <vector>
 
-enum class IdlePolicy { Spin, Yield, Sleep };
 // How broadcast events (Trade, BookUpdate, SessionStart) reach agents.
 //   Spsc:      one push per agent into its private queue (O(agents) per broadcast)
 //   Multicast: one publish into a shared ring; each agent reads with its own cursor

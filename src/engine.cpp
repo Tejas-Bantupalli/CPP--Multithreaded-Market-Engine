@@ -15,6 +15,14 @@
 
 namespace {
 
+void engine_idle(IdlePolicy p) {
+    switch (p) {
+        case IdlePolicy::Spin: break;
+        case IdlePolicy::Yield: std::this_thread::yield(); break;
+        case IdlePolicy::Sleep: std::this_thread::sleep_for(std::chrono::microseconds(50)); break;
+    }
+}
+
 void pin_to(int cpu) {
 #ifdef __linux__
     const int n = static_cast<int>(std::thread::hardware_concurrency());
@@ -26,14 +34,6 @@ void pin_to(int cpu) {
 #else
     (void)cpu;
 #endif
-}
-
-void idle(IdlePolicy p) {
-    switch (p) {
-        case IdlePolicy::Spin: break;
-        case IdlePolicy::Yield: std::this_thread::yield(); break;
-        case IdlePolicy::Sleep: std::this_thread::sleep_for(std::chrono::microseconds(50)); break;
-    }
 }
 
 } // namespace
@@ -108,7 +108,9 @@ Engine::Engine(EngineConfig cfg) : cfg_(std::move(cfg)), impl_(std::make_unique<
 Engine::~Engine() = default;
 
 AgentId Engine::add_agent(std::unique_ptr<Strategy> s) {
-    return add_agent(std::move(s), cfg_.transport);
+    // The strategy owns its data path unless the caller overrode it explicitly.
+    const TransportKind t = s->transport().value_or(cfg_.transport);
+    return add_agent(std::move(s), t);
 }
 
 AgentId Engine::add_agent(std::unique_ptr<Strategy> s, TransportKind t) {
@@ -318,7 +320,7 @@ void Engine::engine_loop() {
 
         if (batch.empty()) {
             if (done) break;
-            idle(cfg_.engine_idle);
+            engine_idle(cfg_.engine_idle);
             continue;
         }
 
@@ -349,28 +351,12 @@ void Engine::engine_loop() {
 // ===================== Agent thread =====================
 void Engine::agent_loop(Slot& s) {
     if (cfg_.pin_threads) pin_to(2 + static_cast<int>(s.id));
+    s.ctx.set_idle(cfg_.agent_idle);
     s.strategy->on_start(s.ctx);
-    // A blocking transport parks the thread rather than burning the idle policy.
-    // The timeout keeps on_idle running so timer-driven strategies still tick,
-    // which is what a real event loop with timers does.
-    const bool parks = s.ctx.transport_blocks();
-    constexpr int64_t PARK_NS = 50000;  // 50 us
-    Event ev;
-    while (running_.load(std::memory_order_relaxed)) {
-        int n = 0;
-        while (n < 256 && s.ctx.poll(ev)) {
-            s.ctx.dispatch(ev, *s.strategy);
-            ++n;
-        }
-        if (n == 0) {
-            s.strategy->on_idle(s.ctx);
-            if (parks) {
-                if (s.ctx.wait_poll(ev, PARK_NS)) s.ctx.dispatch(ev, *s.strategy);
-            } else {
-                idle(cfg_.agent_idle);
-            }
-        }
-    }
+    // The strategy owns the loop from here. The default implementation in
+    // strategy.h is a batch-drain poller; a strategy that cares about its data
+    // path replaces it. It must return once running_ reads false.
+    s.strategy->run(s.ctx, running_);
 }
 
 // ===================== Session =====================

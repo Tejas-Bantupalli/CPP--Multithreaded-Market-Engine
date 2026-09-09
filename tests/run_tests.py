@@ -19,6 +19,7 @@ CASES = (
     "engine_transport_mutex",
     "engine_transport_mutex_cv",
     "engine_transport_mixed",
+    "engine_custom_run_loop",
     "engine_multicast",
     "engine_collar",
     "engine_fees",
