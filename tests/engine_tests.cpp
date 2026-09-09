@@ -236,7 +236,11 @@ void conservation_with(EngineConfig cfg) {
             CHECK(std::fabs(a.agent_cash - a.cash) < 1e-6);
         }
     }
-    CHECK(std::fabs(cash - INITIAL_CASH * r.agents.size()) < 1e-6);
+    // Cash is no longer conserved on its own: venue fees leave the system. Cash plus
+    // the signed fees every agent paid must still return the starting total.
+    double fees = 0;
+    for (const AgentReport& a : r.agents) fees += a.fees;
+    CHECK(std::fabs((cash + fees) - INITIAL_CASH * r.agents.size()) < 1e-6);
     CHECK(pos == 0);
     CHECK(processed == r.commands && submitted == r.commands); // nothing lost between agent and engine
     CHECK(r.submit_to_pop.count == r.commands && r.match.count == r.commands);
@@ -310,7 +314,9 @@ struct Buyer : Strategy {
 };
 
 void engine_matching_pair() {
-    Engine e(short_cfg(0.3));
+    EngineConfig mp = short_cfg(0.3);
+    mp.maker_fee = 0; mp.taker_fee = 0;  // this test is about matching, not fees
+    Engine e(mp);
     e.add_agent(std::make_unique<Seller>());
     e.add_agent(std::make_unique<Buyer>());
     const RunReport r = e.run();
@@ -322,6 +328,30 @@ void engine_matching_pair() {
     CHECK(std::fabs((r.agents[0].cash - INITIAL_CASH) - expected) < 1e-6);
     CHECK(std::fabs((INITIAL_CASH - r.agents[1].cash) - expected) < 1e-6);
     CHECK(r.agents[1].react.count >= 20 && r.agents[1].fills == 20 && r.agents[1].delivery.count > 0);
+}
+
+// One maker, one taker, one fill: the rebate and the fee must land on the right sides.
+void engine_fees() {
+    EngineConfig cfg = short_cfg(0.3);
+    cfg.maker_fee = -0.01;  // 1 cent per unit paid TO the resting side
+    cfg.taker_fee = 0.02;   // 2 cents per unit charged to the aggressor
+    Engine e(cfg);
+    e.add_agent(std::make_unique<Seller>());  // rests 20 asks
+    e.add_agent(std::make_unique<Buyer>());   // lifts them one at a time
+    const RunReport r = e.run();
+    CHECK(r.trades == 20 && r.volume == 20);
+    const AgentReport& mk = r.agents[0];
+    const AgentReport& tk = r.agents[1];
+    CHECK(mk.maker_fills == 20 && mk.taker_fills == 0);
+    CHECK(tk.taker_fills == 20 && tk.maker_fills == 0);
+    CHECK(std::fabs(mk.fees - (-0.01 * 20)) < 1e-9);  // earned a rebate
+    CHECK(std::fabs(tk.fees - (0.02 * 20)) < 1e-9);   // paid a fee
+    // The rebate raises the maker's cash and the fee lowers the taker's, against a
+    // fee-free run of the same trades.
+    double expected = 0;
+    for (int i = 0; i < 20; ++i) expected += to_dollars(10000 + i);
+    CHECK(std::fabs((mk.cash - INITIAL_CASH) - (expected + 0.20)) < 1e-6);
+    CHECK(std::fabs((INITIAL_CASH - tk.cash) - (expected + 0.40)) < 1e-6);
 }
 
 void agent_spec() {
@@ -352,6 +382,7 @@ int main(int argc, char** argv) {
         else if (name == "engine_conservation") engine_conservation();
         else if (name == "engine_multicast") engine_multicast();
         else if (name == "engine_collar") engine_collar();
+        else if (name == "engine_fees") engine_fees();
         else if (name == "multicast_ring") multicast_ring();
         else if (name == "engine_shutdown_drain") engine_shutdown_drain();
         else if (name == "engine_matching_pair") engine_matching_pair();

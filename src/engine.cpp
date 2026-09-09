@@ -51,6 +51,9 @@ struct Engine::Slot {
     Qty position = 0;
     uint64_t fills = 0;
     Qty volume = 0;
+    double fees = 0;          // signed: negative means rebates earned
+    uint64_t maker_fills = 0; // fills where this agent was resting
+    uint64_t taker_fills = 0;
     uint64_t orders_processed = 0;
     uint64_t orders_rejected = 0;
     uint64_t events_dropped = 0;
@@ -222,8 +225,17 @@ void Engine::process(const Command& c) {
         b.cash -= notional; b.position += f.qty; ++b.fills; b.volume += f.qty;
         s.cash += notional; s.position -= f.qty; ++s.fills; s.volume += f.qty;
 
+        // Venue fees: the resting side is the maker, the incoming side the taker.
+        Slot& mkr = *slots_[f.maker];
+        Slot& tkr = *slots_[f.taker];
+        const double mfee = cfg_.maker_fee * f.qty;
+        const double tfee = cfg_.taker_fee * f.qty;
+        mkr.cash -= mfee; mkr.fees += mfee; ++mkr.maker_fills;
+        tkr.cash -= tfee; tkr.fees += tfee; ++tkr.taker_fills;
+
         Event mk;
         mk.kind = EventKind::Fill;
+        mk.fee = mfee;
         mk.order_id = f.maker_id;
         mk.side = opposite(f.taker_side);
         mk.is_maker = 1;
@@ -234,6 +246,7 @@ void Engine::process(const Command& c) {
 
         Event tk;
         tk.kind = EventKind::Fill;
+        tk.fee = tfee;
         tk.order_id = f.taker_id;
         tk.side = f.taker_side;
         tk.is_maker = 0;
@@ -405,6 +418,9 @@ RunReport Engine::build_report(Ts t_start, Ts t_end) {
         a.pnl = s.cash + to_dollars(r.mark_px) * s.position - INITIAL_CASH;
         a.fills = s.fills;
         a.volume = s.volume;
+        a.fees = s.fees;
+        a.maker_fills = s.maker_fills;
+        a.taker_fills = s.taker_fills;
         a.orders_processed = s.orders_processed;
         a.orders_rejected = s.orders_rejected;
         a.events_dropped = s.events_dropped + s.ctx.multicast_dropped();

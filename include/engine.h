@@ -29,6 +29,12 @@ struct EngineConfig {
     // the initial price. 0 disables. Keeps a feedback loop between agents from
     // dislocating a thin book by tens of percent inside one session.
     double collar = 0.05;
+    // Venue fees in dollars per unit, applied on every fill. Signed: negative is a
+    // rebate paid to the agent, positive is a fee charged. Real venues pay resting
+    // liquidity and charge liquidity takers, which is what makes queue position
+    // worth money and therefore what makes speed pay.
+    double maker_fee = -0.002;
+    double taker_fee = 0.003;
     std::string trade_log;      // CSV path or empty
     std::string cmd_log;        // CSV path or empty
 };
