@@ -19,8 +19,8 @@ from proposer import PERSONAS, Proposal
 from catalogue import MARKET_DESCRIPTION
 
 ROOT = Path(__file__).resolve().parent.parent
-INTERFACE_FILES = ["include/types.h", "include/strategy.h", "include/strategies.h",
-                   "include/plugin.h", "plugins/example_breakout.cpp"]
+INTERFACE_FILES = ["include/types.h", "include/transport.h", "include/strategy.h",
+                   "include/strategies.h", "include/plugin.h", "plugins/example_breakout.cpp"]
 
 CODE_SCHEMA = {
     "type": "object",

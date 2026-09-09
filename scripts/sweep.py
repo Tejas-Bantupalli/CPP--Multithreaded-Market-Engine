@@ -65,7 +65,9 @@ def summarise(reports):
             key = (a["id"], a["name"])
             agents.setdefault(key, {"pnl": [], "fills": [], "volume": [], "events_dropped": [], "queue_full": [],
                                     "fees": [], "maker_fills": [], "taker_fills": [],
-                                    "react_p50": [], "react_p99": [], "react_max": [], "react_count": []})
+                                    "react_p50": [], "react_p99": [], "react_max": [], "react_count": [],
+                                    "deliv_p50": [], "deliv_p99": [], "deliv_max": [],
+                                    "t2t_p50": [], "t2t_p99": [], "t2t_max": []})
             agents[key]["pnl"].append(a["pnl"])
             agents[key]["fills"].append(a["fills"])
             agents[key]["volume"].append(a["volume"])
@@ -79,6 +81,11 @@ def summarise(reports):
             agents[key]["react_p99"].append(rl["p99"])
             agents[key]["react_max"].append(rl["max"])
             agents[key]["react_count"].append(rl["count"])
+            dl = a["latency"]["delivery"]; ag = a["latency"]["event_age"]
+            agents[key]["deliv_p50"].append(dl["p50"]); agents[key]["deliv_p99"].append(dl["p99"])
+            agents[key]["deliv_max"].append(dl["max"])
+            agents[key]["t2t_p50"].append(ag["p50"]); agents[key]["t2t_p99"].append(ag["p99"])
+            agents[key]["t2t_max"].append(ag["max"])
 
     def stats(xs):
         return {
@@ -107,6 +114,13 @@ def summarise(reports):
             "react_p99_ns": statistics.median(d["react_p99"]),
             "react_max_ns": statistics.median(d["react_max"]),
             "react_count_mean": statistics.fmean(d["react_count"]),
+            "delivery_p50_ns": statistics.median(d["deliv_p50"]),
+            "delivery_p99_ns": statistics.median(d["deliv_p99"]),
+            "delivery_max_ns": statistics.median(d["deliv_max"]),
+            "tick_to_trade_p50_ns": statistics.median(d["t2t_p50"]),
+            "tick_to_trade_p99_ns": statistics.median(d["t2t_p99"]),
+            "tick_to_trade_max_ns": statistics.median(d["t2t_max"]),
+            "transport": None,
         })
 
     engine = {
