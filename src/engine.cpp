@@ -12,6 +12,9 @@
 #include <pthread.h>
 #include <sched.h>
 #endif
+#ifdef __APPLE__
+#include <pthread/qos.h>
+#endif
 
 namespace {
 
@@ -21,6 +24,25 @@ void engine_idle(IdlePolicy p) {
         case IdlePolicy::Yield: std::this_thread::yield(); break;
         case IdlePolicy::Sleep: std::this_thread::sleep_for(std::chrono::microseconds(50)); break;
     }
+}
+
+// Ask the scheduler for a class of core. On Apple Silicon this is what decides
+// performance vs efficiency core placement; there is no affinity API on arm64.
+void set_qos(QosClass q) {
+#ifdef __APPLE__
+    if (q == QosClass::Inherit) return;
+    qos_class_t c = QOS_CLASS_DEFAULT;
+    switch (q) {
+        case QosClass::UserInteractive: c = QOS_CLASS_USER_INTERACTIVE; break;
+        case QosClass::UserInitiated:   c = QOS_CLASS_USER_INITIATED;   break;
+        case QosClass::Utility:         c = QOS_CLASS_UTILITY;          break;
+        case QosClass::Background:      c = QOS_CLASS_BACKGROUND;       break;
+        case QosClass::Inherit:         return;
+    }
+    pthread_set_qos_class_self_np(c, 0);
+#else
+    (void)q;
+#endif
 }
 
 void pin_to(int cpu) {
@@ -287,6 +309,7 @@ void Engine::process(const Command& c) {
 
 // ===================== Engine thread =====================
 void Engine::engine_loop() {
+    set_qos(cfg_.qos);
     if (cfg_.pin_threads) pin_to(1);
     Impl& im = *impl_;
 
@@ -350,6 +373,7 @@ void Engine::engine_loop() {
 
 // ===================== Agent thread =====================
 void Engine::agent_loop(Slot& s) {
+    set_qos(cfg_.qos);
     if (cfg_.pin_threads) pin_to(2 + static_cast<int>(s.id));
     s.ctx.set_idle(cfg_.agent_idle);
     s.strategy->on_start(s.ctx);

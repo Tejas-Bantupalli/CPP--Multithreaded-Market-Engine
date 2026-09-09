@@ -111,6 +111,10 @@ def main():
     ap.add_argument("--seeds", type=int, default=15)
     ap.add_argument("--seconds", type=float, default=2.0)
     ap.add_argument("--idle", default="yield", help="idle policy for polling transports")
+    ap.add_argument("--qos", default="inherit",
+                    help="thread scheduling class passed to the engine. On Apple Silicon this "
+                         "decides performance vs efficiency core placement; leaving it at inherit "
+                         "means core type is an uncontrolled variable in every number below.")
     ap.add_argument("--pressure", default="", help="comma list of agent counts to sweep, e.g. 3,5,7,9,12,16")
     ap.add_argument("--out", default="")
     args = ap.parse_args()
@@ -122,11 +126,12 @@ def main():
     result = {"config": vars(args), "isolated": [], "head2head": []}
 
     # ---- isolated: every agent on one transport, one run per transport
+    print(f"qos={args.qos}  idle={args.idle}")
     print(f"isolated: {PROBE} against {len(BACKGROUND)} noise traders, "
           f"{args.seeds} seeds x {args.seconds}s, all agents on the same transport")
     for t in TRANSPORTS:
         specs = [f"{PROBE},transport={t}"] + [f"{b}:transport={t}" for b in BACKGROUND]
-        reps = [run(binary, s, args.seconds, specs, ["--idle", args.idle]) for s in seeds]
+        reps = [run(binary, s, args.seconds, specs, ["--idle", args.idle, "--qos", args.qos]) for s in seeds]
         result["isolated"].append(agent_stats(reps, 0))
         print(f"  {t} done")
 
@@ -134,7 +139,7 @@ def main():
     print(f"\nhead2head: {len(TRANSPORTS)} identical market makers in one market, "
           f"one per transport, competing for the same queue positions")
     specs = [f"{PROBE},transport={t}" for t in TRANSPORTS] + BACKGROUND
-    reps = [run(binary, s, args.seconds, specs, ["--idle", args.idle]) for s in seeds]
+    reps = [run(binary, s, args.seconds, specs, ["--idle", args.idle, "--qos", args.qos]) for s in seeds]
     for i in range(len(TRANSPORTS)):
         result["head2head"].append(agent_stats(reps, i))
 
@@ -173,7 +178,7 @@ def main():
             for t in TRANSPORTS:
                 specs = [f"{PROBE},transport={t}"] + [f"{BACKGROUND[i % len(BACKGROUND)]}:transport={t}"
                                                       for i in range(n - 1)]
-                reps = [run(binary, sd, args.seconds, specs, ["--idle", args.idle]) for sd in seeds]
+                reps = [run(binary, sd, args.seconds, specs, ["--idle", args.idle, "--qos", args.qos]) for sd in seeds]
                 st = agent_stats(reps, 0)
                 row[t] = {"p50": st["tick_to_trade_p50"], "p99": st["tick_to_trade_p99"],
                           "delivery_p50": st["delivery_p50"], "react_p50": st["react_p50"]}

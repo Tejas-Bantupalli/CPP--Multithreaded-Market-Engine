@@ -21,6 +21,9 @@ void usage() {
         "  --idle MODE        agent idle policy: spin | yield | sleep (default yield)\n"
         "  --engine-idle MODE engine idle policy (default yield)\n"
         "  --pin              pin threads to cores (Linux only)\n"
+        "  --qos CLASS        thread scheduling class: interactive | initiated | utility |\n"
+        "                     background | inherit (default). On Apple Silicon this decides\n"
+        "                     performance vs efficiency core placement. No-op on Linux.\n"
         "  --transport MODE   agent<->engine plumbing: spsc | mutex | mutex_cv (default spsc).\n"
         "                     Override per agent with transport=MODE inside its spec.\n"
         "  --maker-fee F      venue fee per unit for resting liquidity, negative = rebate (default -0.002)\n"
@@ -69,6 +72,15 @@ int main(int argc, char** argv) {
         else if (a == "--idle") { if (!parse_idle(need("a mode"), cfg.agent_idle)) { std::cerr << "bad idle mode\n"; return 2; } }
         else if (a == "--engine-idle") { if (!parse_idle(need("a mode"), cfg.engine_idle)) { std::cerr << "bad idle mode\n"; return 2; } }
         else if (a == "--pin") cfg.pin_threads = true;
+        else if (a == "--qos") {
+            const std::string q = need("interactive|initiated|utility|background|inherit");
+            if (q == "interactive") cfg.qos = QosClass::UserInteractive;
+            else if (q == "initiated") cfg.qos = QosClass::UserInitiated;
+            else if (q == "utility") cfg.qos = QosClass::Utility;
+            else if (q == "background") cfg.qos = QosClass::Background;
+            else if (q == "inherit") cfg.qos = QosClass::Inherit;
+            else { std::cerr << "bad qos class\n"; return 2; }
+        }
         else if (a == "--collar") cfg.collar = std::stod(need("a fraction, 0 to disable"));
         else if (a == "--transport") {
             if (!parse_transport(need("spsc|mutex|mutex_cv"), cfg.transport)) {
