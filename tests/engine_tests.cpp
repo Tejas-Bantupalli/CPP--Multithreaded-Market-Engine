@@ -438,6 +438,55 @@ void engine_fees() {
     CHECK(std::fabs((INITIAL_CASH - tk.cash) - (expected + 0.40)) < 1e-6);
 }
 
+
+// A strategy that owns its whole stack: picks its transport, drives its own
+// loop, and does its own bookkeeping via apply(). This is the contract the
+// HFT agents are given, so it has to be exercised.
+struct OwnStack : Strategy {
+    std::atomic<uint64_t> loops{0};
+    uint64_t consumed = 0;
+    const char* name() const override { return "ownstack"; }
+    std::optional<TransportKind> transport() const override { return TransportKind::MutexCv; }
+    void on_event(const Event&, AgentContext&) override {}  // unused: run() owns dispatch
+
+    void run(AgentContext& ctx, const std::atomic<bool>& running) override {
+        Event ev;
+        while (running.load(std::memory_order_relaxed)) {
+            loops.fetch_add(1, std::memory_order_relaxed);
+            bool got = false;
+            while (ctx.poll(ev)) {                 // drain without a batch cap
+                ctx.apply(ev);                     // bookkeeping, no on_event
+                ++consumed;
+                got = true;
+                if (ev.kind == EventKind::Trade && ctx.has_ask() && ctx.position() < 10)
+                    ctx.submit(Side::Buy, ctx.ask_px(), 1, TimeInForce::IOC);
+            }
+            if (!got && !ctx.wait_poll(ev, 20000)) continue;
+            if (!got) { ctx.apply(ev); ++consumed; }
+        }
+    }
+};
+
+void engine_custom_run_loop() {
+    EngineConfig cfg = short_cfg(0.3);
+    cfg.transport = TransportKind::Spsc;          // the strategy must override this
+    Engine e(cfg);
+    e.add_agent(make_strategy("mm", Params{}));
+    e.add_agent(make_strategy("noise", Params{}));
+    auto* own = new OwnStack();
+    e.add_agent(std::unique_ptr<Strategy>(own));
+    const RunReport r = e.run();
+    CHECK(r.agents[2].transport == std::string("mutex_cv"));   // its own choice won
+    CHECK(own->loops.load() > 0);                              // its loop really ran
+    CHECK(own->consumed > 0);                                  // and consumed events
+    CHECK(r.agents[2].events == own->consumed);                // apply() did the counting
+    if (r.agents[2].events_dropped == 0 && r.agents[2].events == r.agents[2].events_sent)
+        CHECK(r.agents[2].agent_position == r.agents[2].position);
+    double cash = 0, fees = 0;
+    for (const AgentReport& a : r.agents) { cash += a.cash; fees += a.fees; }
+    CHECK(std::fabs((cash + fees) - INITIAL_CASH * r.agents.size()) < 1e-6);
+}
+
 void agent_spec() {
     std::string name; Params p;
     CHECK(parse_agent_spec("mm", name, p) && name == "mm" && p.kv.empty());
@@ -468,6 +517,7 @@ int main(int argc, char** argv) {
         else if (name == "engine_transport_mutex") engine_transport_mutex();
         else if (name == "engine_transport_mutex_cv") engine_transport_mutex_cv();
         else if (name == "engine_transport_mixed") engine_transport_mixed();
+        else if (name == "engine_custom_run_loop") engine_custom_run_loop();
         else if (name == "engine_multicast") engine_multicast();
         else if (name == "engine_collar") engine_collar();
         else if (name == "engine_fees") engine_fees();

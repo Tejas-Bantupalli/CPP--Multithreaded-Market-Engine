@@ -7,7 +7,10 @@
 #include "types.h"
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
+#include <optional>
+#include <thread>
 #include <random>
 #include <string>
 
@@ -23,6 +26,23 @@ public:
     virtual void on_start(AgentContext&) {}
     virtual void on_event(const Event& ev, AgentContext& ctx) = 0;
     virtual void on_idle(AgentContext&) {}
+
+    // ---- stack ownership -----------------------------------------------
+    // A real desk owns its market-data path, its processing and its order path.
+    // These let a strategy do the same instead of accepting the host's defaults.
+
+    // Which plumbing carries your events and orders. Return nothing to accept
+    // whatever the host was configured with.
+    virtual std::optional<TransportKind> transport() const { return std::nullopt; }
+
+    // Own your entire event loop. The default drains in batches and falls back to
+    // the host idle policy, which is a reasonable general-purpose loop and is not
+    // necessarily the right one for you. Override it to control batch size, how
+    // you wait, when you run housekeeping, and when you submit.
+    //
+    // Contract: return promptly once `running` reads false, and call ctx.apply()
+    // for every event you consume or your own books will drift from the engine's.
+    virtual void run(AgentContext& ctx, const std::atomic<bool>& running);
 };
 
 // Agent-side counters and histograms. Single writer: the agent thread.
@@ -134,7 +154,10 @@ public:
     bool wait_poll(Event& ev, int64_t timeout_ns) { return in_.wait_pop(ev, timeout_ns); }
     const char* transport_name() const { return in_.name(); }
 
-    void dispatch(const Event& ev, Strategy& s) {
+    // Bookkeeping only: position, cash, fees, top of book, and the delivery
+    // histogram. A custom run loop must call this for every event it consumes.
+    // It does not call your on_event.
+    void apply(const Event& ev) {
         t_dispatch_ = now_ns();
         t_event_ = ev.ts;
         ++stats_.events;
@@ -161,9 +184,27 @@ public:
             case EventKind::Cancelled: ++stats_.cancelled; break;
             case EventKind::Ack: break;
         }
+    }
+
+    // apply() then hand the event to the strategy. This is what the default loop
+    // uses; t_dispatch_ stays set across on_event so react latency is measured
+    // from the moment the event was taken off the channel.
+    void dispatch(const Event& ev, Strategy& s) {
+        apply(ev);
         s.on_event(ev, *this);
         t_dispatch_ = 0;
     }
+
+    // Wait the way the host was configured to. Only meaningful for polling
+    // transports; a blocking one should use wait_poll instead.
+    void idle() const {
+        switch (idle_) {
+            case IdlePolicy::Spin: break;
+            case IdlePolicy::Yield: std::this_thread::yield(); break;
+            case IdlePolicy::Sleep: std::this_thread::sleep_for(std::chrono::microseconds(50)); break;
+        }
+    }
+    void set_idle(IdlePolicy p) { idle_ = p; }   // engine, before the thread starts
 
 private:
     void update_top(const Event& ev) {
@@ -191,5 +232,29 @@ private:
     uint64_t market_seed_;
     Price initial_px_ = last_px_;
     Ts t_start_ = 0;
+    IdlePolicy idle_ = IdlePolicy::Yield;
     AgentStats stats_;
 };
+
+// The default event loop. Batch-drain, then housekeeping, then wait. Strategies
+// that care about their data path are expected to replace this.
+inline void Strategy::run(AgentContext& ctx, const std::atomic<bool>& running) {
+    const bool parks = ctx.transport_blocks();
+    constexpr int64_t PARK_NS = 50000;  // 50 us, so on_idle still ticks
+    Event ev;
+    while (running.load(std::memory_order_relaxed)) {
+        int n = 0;
+        while (n < 256 && ctx.poll(ev)) {
+            ctx.dispatch(ev, *this);
+            ++n;
+        }
+        if (n == 0) {
+            on_idle(ctx);
+            if (parks) {
+                if (ctx.wait_poll(ev, PARK_NS)) ctx.dispatch(ev, *this);
+            } else {
+                ctx.idle();
+            }
+        }
+    }
+}

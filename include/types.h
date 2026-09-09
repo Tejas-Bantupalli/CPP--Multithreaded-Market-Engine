@@ -17,6 +17,9 @@ constexpr double TICK = 0.01;
 constexpr double INITIAL_CASH = 100000.0;
 constexpr size_t QCAP = 1 << 14; // per-queue capacity (power of two)
 
+// How a polling consumer waits when it has nothing to do.
+enum class IdlePolicy { Spin, Yield, Sleep };
+
 inline Ts now_ns() {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(
                std::chrono::steady_clock::now().time_since_epoch())
