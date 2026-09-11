@@ -10,6 +10,11 @@
 # Generated experiment output; keep datasets elsewhere when they should be versioned
 /results/
 /outputs/
+# Archived pilot: compiled binaries, copied engine sources and raw results
+/experiments/trading_loop_pilot/
+
+# Local agent-tool configuration
+/.codex/
 
 # Python and macOS housekeeping
 __pycache__/
