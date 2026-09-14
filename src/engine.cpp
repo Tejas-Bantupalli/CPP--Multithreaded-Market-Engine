@@ -1,302 +1,478 @@
 #include "engine.h"
-#include "engine_state.h"
+
+#include "logger.h"
+#include "order_book.h"
 
 #include <algorithm>
-#include <cmath>
-#include <iostream>
-#include <random>
+#include <chrono>
+#include <stdexcept>
 #include <thread>
-#include <vector>
 
-// ===================== Helpers =====================
-
-double compute_ma_or_price() {
-    std::scoped_lock<std::mutex> lock(price_mtx);
-    if (price_history.empty()) return market_price.load(std::memory_order_relaxed);
-    double sum = 0.0;
-    for (double p : price_history) sum += p;
-    return sum / price_history.size();
-}
-
-void push_price(double px) {
-    std::scoped_lock<std::mutex> lock(price_mtx);
-    price_history.push_back(px);
-    if (price_history.size() > MA_PERIOD) price_history.pop_front();
-}
+#ifdef __linux__
+#include <pthread.h>
+#include <sched.h>
+#endif
+#ifdef __APPLE__
+#include <pthread/qos.h>
+#endif
 
 namespace {
-SPSCQueue<Command, QCAP>& order_q_for(uint32_t id) {
-    if (id == 0) return oq0;
-    if (id == 1) return oq1;
-    if (id == 2) return oq2;
-    return oq99;
-}
 
-SPSCQueue<MarketEvent, QCAP>& md_q_for(uint32_t id) {
-    if (id == 0) return md0;
-    if (id == 1) return md1;
-    if (id == 2) return md2;
-    return md99;
-}
-} 
-
-// ===================== Submit Order (trader -> engine queue) =====================
-void submit_order(bool is_buy,
-                  int qty,
-                  double limit_px,
-                  uint32_t trader_id,
-                  std::chrono::steady_clock::time_point t_event,
-                  std::chrono::steady_clock::time_point t_recv) {
-    if (qty <= 0) return;
-
-    Order o{qty, is_buy, limit_px, trader_id, next_seq.fetch_add(1, std::memory_order_relaxed)};
-    Command c{o, t_event, t_recv, std::chrono::steady_clock::now()};
-
-    const int idx = idx_for(trader_id);
-
-    record_lat(lat_recv_to_submit[idx],
-               (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(c.t_submit - c.t_recv).count());
-    record_lat(lat_event_to_submit[idx],
-               (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(c.t_submit - c.t_event).count());
-
-    auto& q = order_q_for(trader_id);
-    if (q.try_push(c)) {
-        pending_orders.fetch_add(1, std::memory_order_release);
-        pending_cv.notify_one();
-    } else {
-        lat_recv_to_submit[idx].dropped.fetch_add(1, std::memory_order_relaxed);
-        lat_event_to_submit[idx].dropped.fetch_add(1, std::memory_order_relaxed);
-        lat_submit_to_pop[idx].dropped.fetch_add(1, std::memory_order_relaxed);
+void engine_idle(IdlePolicy p) {
+    switch (p) {
+        case IdlePolicy::Spin: break;
+        case IdlePolicy::Yield: std::this_thread::yield(); break;
+        case IdlePolicy::Sleep: std::this_thread::sleep_for(std::chrono::microseconds(50)); break;
     }
 }
 
-// ===================== Engine publishes MarketEvent (engine -> traders) =====================
-void publish_event(uint64_t ev_seq, double last_trade_px) {
-    MarketEvent ev{ev_seq, last_trade_px, std::chrono::steady_clock::now()};
-    (void)md0.try_push(ev);
-    (void)md1.try_push(ev);
-    (void)md2.try_push(ev);
-    (void)md99.try_push(ev);
+// Ask the scheduler for a class of core. On Apple Silicon this is what decides
+// performance vs efficiency core placement; there is no affinity API on arm64.
+void set_qos(QosClass q) {
+#ifdef __APPLE__
+    if (q == QosClass::Inherit) return;
+    qos_class_t c = QOS_CLASS_DEFAULT;
+    switch (q) {
+        case QosClass::UserInteractive: c = QOS_CLASS_USER_INTERACTIVE; break;
+        case QosClass::UserInitiated:   c = QOS_CLASS_USER_INITIATED;   break;
+        case QosClass::Utility:         c = QOS_CLASS_UTILITY;          break;
+        case QosClass::Background:      c = QOS_CLASS_BACKGROUND;       break;
+        case QosClass::Inherit:         return;
+    }
+    pthread_set_qos_class_self_np(c, 0);
+#else
+    (void)q;
+#endif
 }
 
-// ===================== Engine Loop (single owner of book) =====================
-void engine_loop() {
-    std::vector<SPSCQueue<Command, QCAP>*> oqs = {&oq0, &oq1, &oq2, &oq99};
-    size_t rr = 0;
+void pin_to(int cpu) {
+#ifdef __linux__
+    const int n = static_cast<int>(std::thread::hardware_concurrency());
+    if (n <= 0) return;
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    CPU_SET(cpu % n, &set);
+    pthread_setaffinity_np(pthread_self(), sizeof(set), &set);
+#else
+    (void)cpu;
+#endif
+}
 
+} // namespace
+
+// ===================== Per-agent slot =====================
+struct Engine::Slot {
+    AgentId id;
+    std::unique_ptr<Strategy> strategy;
+    TransportKind transport;
+    std::unique_ptr<Channel<Command>> in;   // agent -> engine
+    std::unique_ptr<Channel<Event>> out;    // engine -> agent
+    AgentContext ctx;
+    std::thread thread;
+    // Engine-side truth. Single writer: the engine thread.
+    double cash = INITIAL_CASH;
+    Qty position = 0;
+    uint64_t fills = 0;
+    Qty volume = 0;
+    double fees = 0;          // signed: negative means rebates earned
+    uint64_t maker_fills = 0; // fills where this agent was resting
+    uint64_t taker_fills = 0;
+    uint64_t orders_processed = 0;
+    uint64_t orders_rejected = 0;
+    uint64_t events_dropped = 0;
+    uint64_t events_sent = 0;     // events the engine addressed to this agent
+    Histogram submit_to_pop;
+
+    Slot(AgentId i, std::unique_ptr<Strategy> s, Price px, uint64_t seed, uint64_t market_seed,
+         TransportKind t)
+        : id(i), strategy(std::move(s)), transport(t),
+          in(make_channel<Command>(t)), out(make_channel<Event>(t)),
+          ctx(i, *in, *out, px, seed, market_seed) {}
+};
+
+// ===================== Engine-thread state =====================
+struct Engine::Impl {
+    OrderBook book;
+    Logger logger;
+    std::unique_ptr<AgentContext::EventRing> ring; // only with Fanout::Multicast
+    Seq ev_seq = 0;
+    uint64_t commands = 0;
+    uint64_t trades = 0;
+    uint64_t events_published = 0;
+    Qty volume = 0;
+    Price last_px;
+    Histogram match;
+    std::vector<Fill> fills;
+    std::vector<CancelInfo> stp;
     std::vector<Command> batch;
-    batch.reserve(1024);
+    Price top_bid = -1, top_ask = -1;
+    Qty top_bq = 0, top_aq = 0;
+    Price collar_lo = 0, collar_hi = 0; // 0,0 = off
 
-    uint64_t ev_seq = 0;
+    explicit Impl(const EngineConfig& c)
+        : book(c.min_px, c.max_px), logger(c.trade_log, c.cmd_log), last_px(c.initial_px) {
+        if (c.fanout == Fanout::Multicast) ring = std::make_unique<AgentContext::EventRing>();
+        if (c.collar > 0) {
+            collar_lo = static_cast<Price>(c.initial_px * (1.0 - c.collar));
+            collar_hi = static_cast<Price>(c.initial_px * (1.0 + c.collar));
+        }
+        fills.reserve(256);
+        stp.reserve(64);
+        batch.reserve(4096);
+    }
+};
 
-    auto should_stop = [&]() -> bool {
-        if (running.load(std::memory_order_relaxed)) return false;
-        if (pending_orders.load(std::memory_order_acquire) > 0) return false;
-        return true; 
-    };
+Engine::Engine(EngineConfig cfg) : cfg_(std::move(cfg)), impl_(std::make_unique<Impl>(cfg_)) {
+    if (cfg_.min_px < 0 || cfg_.max_px <= cfg_.min_px) throw std::invalid_argument("bad price band");
+    if (cfg_.initial_px < cfg_.min_px || cfg_.initial_px >= cfg_.max_px) throw std::invalid_argument("initial_px outside band");
+}
 
-    publish_event(++ev_seq, market_price.load(std::memory_order_relaxed));
+Engine::~Engine() = default;
+
+AgentId Engine::add_agent(std::unique_ptr<Strategy> s) {
+    // The strategy owns its data path unless the caller overrode it explicitly.
+    const TransportKind t = s->transport().value_or(cfg_.transport);
+    return add_agent(std::move(s), t);
+}
+
+AgentId Engine::add_agent(std::unique_ptr<Strategy> s, TransportKind t) {
+    if (running_.load()) throw std::logic_error("add_agent during run");
+    const AgentId id = static_cast<AgentId>(slots_.size());
+    const uint64_t seed = cfg_.seed * 1000003ULL + id * 7919ULL + 1;
+    slots_.push_back(std::make_unique<Slot>(id, std::move(s), cfg_.initial_px, seed, cfg_.seed, t));
+    return id;
+}
+
+// ===================== Event helpers =====================
+void Engine::fill_top(Event& ev) const {
+    const OrderBook& b = impl_->book;
+    ev.bid_px = b.has_bid() ? b.best_bid() : 0;
+    ev.bid_qty = b.best_bid_qty();
+    ev.ask_px = b.has_ask() ? b.best_ask() : 0;
+    ev.ask_qty = b.best_ask_qty();
+}
+
+void Engine::broadcast(Event ev) {
+    ev.seq = ++impl_->ev_seq;
+    ev.ts = now_ns();
+    ++impl_->events_published;
+    if (impl_->ring) {
+        impl_->ring->publish(ev); // one write, every agent reads it
+        for (auto& s : slots_) ++s->events_sent;
+        return;
+    }
+    for (auto& s : slots_) {
+        ++s->events_sent;
+        if (!s->out->push(ev)) ++s->events_dropped;
+    }
+}
+
+void Engine::send(AgentId to, Event ev) {
+    ev.seq = ++impl_->ev_seq;
+    ev.ts = now_ns();
+    ++impl_->events_published;
+    Slot& s = *slots_[to];
+    ++s.events_sent;
+    if (!s.out->push(ev)) ++s.events_dropped;
+}
+
+// ===================== Command processing =====================
+void Engine::process(const Command& c) {
+    Impl& im = *impl_;
+    Slot& owner = *slots_[c.agent];
+    ++owner.orders_processed;
+    ++im.commands;
+    im.logger.log_cmd(c);
+
+    if (c.kind == CmdKind::Cancel) {
+        CancelInfo ci;
+        RejectReason why;
+        Event ev;
+        ev.order_id = c.id;
+        if (im.book.cancel(c.id, c.agent, ci, why)) {
+            ev.kind = EventKind::Cancelled;
+            ev.remaining = ci.remaining;
+        } else {
+            ev.kind = EventKind::Rejected;
+            ev.reason = why;
+            ++owner.orders_rejected;
+        }
+        send(c.agent, ev);
+        return;
+    }
+
+    if (im.collar_hi > 0 && (c.px < im.collar_lo || c.px > im.collar_hi)) {
+        ++owner.orders_rejected;
+        Event ev;
+        ev.kind = EventKind::Rejected;
+        ev.order_id = c.id;
+        ev.reason = RejectReason::Collar;
+        ev.side = c.side;
+        ev.px = c.px;
+        ev.qty = c.qty;
+        send(c.agent, ev);
+        return;
+    }
+
+    im.fills.clear();
+    im.stp.clear();
+    const AddResult res = im.book.add(c, im.fills, im.stp);
+
+    for (const CancelInfo& ci : im.stp) {
+        Event ev;
+        ev.kind = EventKind::Cancelled;
+        ev.order_id = ci.id;
+        ev.remaining = ci.remaining;
+        send(ci.agent, ev);
+    }
+
+    if (!res.accepted) {
+        ++owner.orders_rejected;
+        Event ev;
+        ev.kind = EventKind::Rejected;
+        ev.order_id = c.id;
+        ev.reason = res.reason;
+        ev.side = c.side;
+        ev.px = c.px;
+        ev.qty = c.qty;
+        send(c.agent, ev);
+        return;
+    }
+
+    {
+        Event ack;
+        ack.kind = EventKind::Ack;
+        ack.order_id = c.id;
+        ack.side = c.side;
+        ack.px = c.px;
+        ack.qty = res.filled;
+        ack.remaining = res.resting;
+        send(c.agent, ack);
+    }
+
+    Qty taker_remaining = c.qty;
+    for (const Fill& f : im.fills) {
+        taker_remaining -= f.qty;
+        const AgentId buyer = f.taker_side == Side::Buy ? f.taker : f.maker;
+        const AgentId seller = f.taker_side == Side::Buy ? f.maker : f.taker;
+        const double notional = to_dollars(f.px) * f.qty;
+
+        Slot& b = *slots_[buyer];
+        Slot& s = *slots_[seller];
+        b.cash -= notional; b.position += f.qty; ++b.fills; b.volume += f.qty;
+        s.cash += notional; s.position -= f.qty; ++s.fills; s.volume += f.qty;
+
+        // Venue fees: the resting side is the maker, the incoming side the taker.
+        Slot& mkr = *slots_[f.maker];
+        Slot& tkr = *slots_[f.taker];
+        const double mfee = cfg_.maker_fee * f.qty;
+        const double tfee = cfg_.taker_fee * f.qty;
+        mkr.cash -= mfee; mkr.fees += mfee; ++mkr.maker_fills;
+        tkr.cash -= tfee; tkr.fees += tfee; ++tkr.taker_fills;
+
+        Event mk;
+        mk.kind = EventKind::Fill;
+        mk.fee = mfee;
+        mk.order_id = f.maker_id;
+        mk.side = opposite(f.taker_side);
+        mk.is_maker = 1;
+        mk.px = f.px;
+        mk.qty = f.qty;
+        mk.remaining = f.maker_remaining;
+        send(f.maker, mk);
+
+        Event tk;
+        tk.kind = EventKind::Fill;
+        tk.fee = tfee;
+        tk.order_id = f.taker_id;
+        tk.side = f.taker_side;
+        tk.is_maker = 0;
+        tk.px = f.px;
+        tk.qty = f.qty;
+        tk.remaining = taker_remaining;
+        send(f.taker, tk);
+
+        Event tr;
+        tr.kind = EventKind::Trade;
+        tr.side = f.taker_side;
+        tr.px = f.px;
+        tr.qty = f.qty;
+        fill_top(tr);
+        broadcast(tr);
+
+        ++im.trades;
+        im.volume += f.qty;
+        im.last_px = f.px;
+        im.logger.log_trade(TradeRecord{now_ns(), im.ev_seq, f.px, f.qty, buyer, seller, f.taker_side});
+    }
+}
+
+// ===================== Engine thread =====================
+void Engine::engine_loop() {
+    set_qos(cfg_.qos);
+    if (cfg_.pin_threads) pin_to(1);
+    Impl& im = *impl_;
+
+    {
+        Event start;
+        start.kind = EventKind::SessionStart;
+        start.px = cfg_.initial_px;
+        fill_top(start);
+        broadcast(start);
+    }
+
+    const size_t n = slots_.size();
+    size_t rr = 0;
+    std::vector<Command>& batch = im.batch;
 
     while (true) {
-        if (pending_orders.load(std::memory_order_acquire) == 0) {
-            if (should_stop()) break;
-            std::unique_lock<std::mutex> lk(pending_mtx);
-            pending_cv.wait_for(lk, std::chrono::milliseconds(1), [&] {
-                return pending_orders.load(std::memory_order_acquire) > 0 || !running.load();
-            });
-        }
-
-        // Drain orders round-robin
+        // Load before draining: anything pushed before producers_done was set is visible.
+        const bool done = producers_done_.load(std::memory_order_acquire);
         batch.clear();
-        for (size_t i = 0; i < oqs.size(); ++i) {
-            auto* q = oqs[(rr + i) % oqs.size()];
+        for (size_t i = 0; i < n; ++i) {
+            Slot& s = *slots_[(rr + i) % n];
             Command c;
             int pops = 0;
-            while (pops < 256 && q->try_pop(c)) {
-                pending_orders.fetch_sub(1, std::memory_order_acq_rel);
-
-                auto t_pop = std::chrono::steady_clock::now();
-                record_lat(lat_submit_to_pop[idx_for(c.o.trader_id)],
-                           (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(t_pop - c.t_submit).count());
-
+            while (pops < 256 && s.in->pop(c)) {
+                s.submit_to_pop.record(now_ns() - c.t_submit);
                 batch.push_back(c);
                 ++pops;
             }
         }
-        rr = (rr + 1) % oqs.size();
+        rr = (rr + 1) % n;
 
-        std::sort(batch.begin(), batch.end(),
-                  [](const Command& a, const Command& b){ return a.o.seq < b.o.seq; });
-
-        for (auto& cmd : batch) {
-            if (cmd.o.is_buy) bids.push(cmd.o);
-            else asks.push(cmd.o);
+        if (batch.empty()) {
+            if (done) break;
+            engine_idle(cfg_.engine_idle);
+            continue;
         }
 
-        bool did_trade = false;
+        std::stable_sort(batch.begin(), batch.end(),
+                         [](const Command& a, const Command& b) { return a.t_submit < b.t_submit; });
 
-        // Match
-        while (!bids.empty() && !asks.empty() && bids.top().limit_px >= asks.top().limit_px) {
-            Order buy  = bids.top(); bids.pop();
-            Order sell = asks.top(); asks.pop();
-
-            int traded_qty = std::min(buy.qty, sell.qty);
-            if (traded_qty <= 0) continue;
-
-            double trade_px = sell.limit_px; 
-            market_price.store(trade_px, std::memory_order_relaxed);
-            push_price(trade_px);
-
-            {
-                std::scoped_lock<std::mutex> pl(portfolios_mtx);
-                portfolios[buy.trader_id].cash -= traded_qty * trade_px;
-                portfolios[buy.trader_id].holdings += traded_qty;
-
-                portfolios[sell.trader_id].cash += traded_qty * trade_px;
-                portfolios[sell.trader_id].holdings -= traded_qty;
-            }
-
-            buy.qty  -= traded_qty;
-            sell.qty -= traded_qty;
-
-            if (buy.qty > 0)  bids.push(buy);
-            if (sell.qty > 0) asks.push(sell);
-
-            std::cout << "Trade: " << traded_qty << " @ " << trade_px
-                      << " (buyer " << buy.trader_id
-                      << ", seller " << sell.trader_id << ")\n";
-
-            did_trade = true;
+        for (const Command& c : batch) {
+            const Ts t0 = now_ns();
+            process(c);
+            im.match.record(now_ns() - t0);
         }
 
-        if (did_trade) {
-            publish_event(++ev_seq, market_price.load(std::memory_order_relaxed));
+        const OrderBook& b = im.book;
+        const Price bb = b.has_bid() ? b.best_bid() : -1;
+        const Price ba = b.has_ask() ? b.best_ask() : -1;
+        const Qty bq = b.best_bid_qty(), aq = b.best_ask_qty();
+        if (bb != im.top_bid || ba != im.top_ask || bq != im.top_bq || aq != im.top_aq) {
+            im.top_bid = bb; im.top_ask = ba; im.top_bq = bq; im.top_aq = aq;
+            Event ev;
+            ev.kind = EventKind::BookUpdate;
+            ev.px = im.last_px;
+            fill_top(ev);
+            broadcast(ev);
         }
-
-        if (should_stop()) break;
     }
 }
 
-// ===================== Strategies (consume MarketEvent queues) =====================
-bool pop_latest_event(uint32_t id, MarketEvent& out) {
-    auto& q = md_q_for(id);
-    MarketEvent ev;
-    bool got = false;
-    while (q.try_pop(ev)) {
-        out = ev;
-        got = true;
-    }
-    return got;
+// ===================== Agent thread =====================
+void Engine::agent_loop(Slot& s) {
+    set_qos(cfg_.qos);
+    if (cfg_.pin_threads) pin_to(2 + static_cast<int>(s.id));
+    s.ctx.set_idle(cfg_.agent_idle);
+    s.strategy->on_start(s.ctx);
+    // The strategy owns the loop from here. The default implementation in
+    // strategy.h is a batch-drain poller; a strategy that cares about its data
+    // path replaces it. It must return once running_ reads false.
+    s.strategy->run(s.ctx, running_);
 }
 
-// Baseline MA strategy 
-// - uses compute_ma_or_price(): lock + sum over deque (extra overhead)
-// - uses market_price atomic
-void ma_strategy_baseline(uint32_t id) {
-    MarketEvent last_ev{};
-    while (running.load(std::memory_order_relaxed) && !pop_latest_event(id, last_ev)) {
-        std::this_thread::yield();
+// ===================== Session =====================
+RunReport Engine::run() {
+    if (slots_.empty()) throw std::logic_error("no agents registered");
+    running_.store(true, std::memory_order_release);
+    producers_done_.store(false, std::memory_order_release);
+    stop_requested_.store(false, std::memory_order_release);
+    impl_->logger.start();
+
+    const Ts t_start = now_ns();
+    for (auto& s : slots_) {
+        s->ctx.begin_session(t_start);
+        s->ctx.attach_ring(impl_->ring.get());
     }
+    std::thread eng([this] { engine_loop(); });
+    for (auto& s : slots_) s->thread = std::thread([this, &s] { agent_loop(*s); });
 
-    while (running.load(std::memory_order_relaxed)) {
-        MarketEvent ev = last_ev;
-        if (pop_latest_event(id, last_ev)) ev = last_ev;
+    const Ts deadline = t_start + static_cast<Ts>(cfg_.session_seconds * 1e9);
+    while (now_ns() < deadline && !stop_requested_.load(std::memory_order_acquire))
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
 
-        auto t_recv = std::chrono::steady_clock::now();
+    // 1) stop producers, 2) join them, 3) tell the engine no more input, 4) drain and join.
+    running_.store(false, std::memory_order_release);
+    for (auto& s : slots_) s->thread.join();
+    producers_done_.store(true, std::memory_order_release);
+    eng.join();
+    const Ts t_end = now_ns();
+    impl_->logger.stop();
 
-        double ma = compute_ma_or_price(); // lock + O(MA_PERIOD) sum
-        double px = market_price.load(std::memory_order_relaxed);
-
-        constexpr int trade_size = 1;
-        constexpr double CROSS = 0.02;
-
-        double diff = px - ma;
-        if (diff > 0.0001) {
-            submit_order(false, trade_size, std::max(0.01, px - CROSS), id, ev.t_event, t_recv);
-        } else if (diff < -0.0001) {
-            submit_order(true, trade_size, px + CROSS, id, ev.t_event, t_recv);
-        }
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
+    return build_report(t_start, t_end);
 }
 
-// FAST MA strategy (very similar logic, but faster C++ path):
-// - NO mutex lock
-// - NO deque summation
-// - uses event.last_trade for px
-// - maintains a local rolling SMA in O(1)
-void ma_strategy_fast(uint32_t id) {
-    MarketEvent last_ev{};
-    while (running.load(std::memory_order_relaxed) && !pop_latest_event(id, last_ev)) {
-        std::this_thread::yield();
+RunReport Engine::build_report(Ts t_start, Ts t_end) {
+    Impl& im = *impl_;
+    RunReport r;
+    r.session_seconds = static_cast<double>(t_end - t_start) / 1e9;
+    r.seed = cfg_.seed;
+    r.fanout = im.ring ? "multicast" : "spsc";
+    r.commands = im.commands;
+    r.trades = im.trades;
+    r.volume = im.volume;
+    r.events_published = im.events_published;
+    r.log_dropped_trades = im.logger.dropped_trades();
+    r.log_dropped_cmds = im.logger.dropped_cmds();
+    r.initial_px = cfg_.initial_px;
+    r.last_px = im.last_px;
+    r.final_bid = im.book.has_bid() ? im.book.best_bid() : 0;
+    r.final_ask = im.book.has_ask() ? im.book.best_ask() : 0;
+    r.final_bid_qty = im.book.best_bid_qty();
+    r.final_ask_qty = im.book.best_ask_qty();
+    r.mark_px = (im.book.has_bid() && im.book.has_ask()) ? (r.final_bid + r.final_ask) / 2 : im.last_px;
+    r.open_orders = im.book.open_orders();
+    r.book_checksum = im.book.checksum();
+    r.commands_per_sec = r.session_seconds > 0 ? r.commands / r.session_seconds : 0;
+    r.trades_per_sec = r.session_seconds > 0 ? r.trades / r.session_seconds : 0;
+    r.match = LatencySummary::from(im.match);
+
+    Histogram merged;
+    for (auto& sp : slots_) {
+        Slot& s = *sp;
+        AgentReport a;
+        a.id = s.id;
+        a.name = s.strategy->name();
+        a.cash = s.cash;
+        a.position = s.position;
+        a.pnl = s.cash + to_dollars(r.mark_px) * s.position - INITIAL_CASH;
+        a.fills = s.fills;
+        a.volume = s.volume;
+        a.transport = transport_name(s.transport);
+        a.events_sent = s.events_sent;
+        a.fees = s.fees;
+        a.maker_fills = s.maker_fills;
+        a.taker_fills = s.taker_fills;
+        a.orders_processed = s.orders_processed;
+        a.orders_rejected = s.orders_rejected;
+        a.events_dropped = s.events_dropped + s.ctx.multicast_dropped();
+        r.events_dropped += a.events_dropped;
+        const AgentStats& st = s.ctx.stats();
+        a.agent_position = s.ctx.position();
+        a.agent_cash = s.ctx.cash();
+        a.submitted = st.submitted;
+        a.queue_full = st.queue_full;
+        a.cancels_sent = st.cancels_sent;
+        a.events = st.events;
+        a.delivery = LatencySummary::from(st.delivery);
+        a.react = LatencySummary::from(st.react);
+        a.event_age = LatencySummary::from(st.event_age);
+        a.submit_to_pop = LatencySummary::from(s.submit_to_pop);
+        merged.merge(s.submit_to_pop);
+        r.agents.push_back(std::move(a));
     }
-
-    RollingSMA sma;
-    // seed with initial known trade
-    if (!std::isnan(last_ev.last_trade)) sma.push(last_ev.last_trade);
-
-    while (running.load(std::memory_order_relaxed)) {
-        MarketEvent ev = last_ev;
-        if (pop_latest_event(id, last_ev)) ev = last_ev;
-
-        auto t_recv = std::chrono::steady_clock::now();
-
-        // Update SMA from event stream (no locks)
-        double px = ev.last_trade;
-        if (!std::isnan(px)) sma.push(px);
-
-        double ma = sma.value(px);
-
-        constexpr int trade_size = 1;
-        constexpr double CROSS = 0.02;
-
-        double diff = px - ma;
-        if (diff > 0.0001) {
-            submit_order(false, trade_size, std::max(0.01, px - CROSS), id, ev.t_event, t_recv);
-        } else if (diff < -0.0001) {
-            submit_order(true, trade_size, px + CROSS, id, ev.t_event, t_recv);
-        }
-
-        // keep SAME cadence as 0/1 so you’re isolating “code speed” not “rate”
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-}
-
-// Chaos strategy
-void chaos(uint32_t id) {
-    thread_local std::mt19937 rng{std::random_device{}()};
-    std::uniform_int_distribution<int> size_dist(1, 3);
-    std::bernoulli_distribution side(0.5);
-    std::bernoulli_distribution cross(0.25);
-    std::uniform_real_distribution<double> off(0.00, 0.05);
-
-    MarketEvent last_ev{};
-    while (running.load(std::memory_order_relaxed) && !pop_latest_event(id, last_ev)) {
-        std::this_thread::yield();
-    }
-
-    while (running.load(std::memory_order_relaxed)) {
-        MarketEvent ev = last_ev;
-        if (pop_latest_event(id, last_ev)) ev = last_ev;
-
-        auto t_recv = std::chrono::steady_clock::now();
-
-        double px = market_price.load(std::memory_order_relaxed);
-        int qty = size_dist(rng);
-        bool is_buy = side(rng);
-
-        double offset = off(rng);
-        bool aggressive = cross(rng);
-
-        double limit_px;
-        if (is_buy) {
-            limit_px = aggressive ? (px + offset) : std::max(0.01, px - offset);
-        } else {
-            limit_px = aggressive ? std::max(0.01, px - offset) : (px + offset);
-        }
-
-        submit_order(is_buy, qty, limit_px, id, ev.t_event, t_recv);
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    }
+    r.submit_to_pop = LatencySummary::from(merged);
+    return r;
 }
