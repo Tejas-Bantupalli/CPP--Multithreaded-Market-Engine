@@ -14,9 +14,7 @@ int main(int argc,char** argv) {
             else throw std::runtime_error("Unknown option");
         }
         if(count<1 || count>10000000 || rate<0 || (cached!=0&&cached!=1)) throw std::runtime_error("Invalid options");
-#ifndef __linux__
-        if(pcpu>=0||ccpu>=0) throw std::runtime_error("Exact affinity requires Linux in this benchmark");
-#endif
+        if(pcpu>=0||ccpu>=0) throw std::runtime_error("Exact CPU pinning is unavailable on macOS");
         auto q=make_queue<Message>(alignment,cached);
         std::atomic<int> ready{0};std::atomic<bool> go{false};int64_t epoch=0;
         uint64_t full=0,empty=0,checksum=0,errors=0;

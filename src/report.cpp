@@ -99,6 +99,9 @@ void print_report(const RunReport& r, std::ostream& os) {
     lat_header(os);
     lat_row(os, "submit_to_pop", r.submit_to_pop);
     lat_row(os, "match", r.match);
+    lat_row(os, "reorder_lag", r.reorder_lag);
+    os << "  out_of_order " << r.out_of_order << " of " << r.commands
+       << "   mpsc_head_stalls " << r.mpsc_head_stalls << "\n";
 
     for (const AgentReport& a : r.agents) {
         os << "\n=== AGENT " << a.id << " (" << a.name << ") ===\n";
@@ -138,6 +141,9 @@ std::string to_json(const RunReport& r) {
       << "  \"book_checksum\": \"" << std::hex << r.book_checksum << std::dec << "\",\n"
       << "  \"latency\": {\"submit_to_pop\": " << lat_json(r.submit_to_pop)
       << ", \"match\": " << lat_json(r.match) << "},\n"
+      << "  \"sequencing\": {\"out_of_order\": " << r.out_of_order
+      << ", \"reorder_lag\": " << lat_json(r.reorder_lag)
+      << ", \"mpsc_head_stalls\": " << r.mpsc_head_stalls << "},\n"
       << "  \"agents\": [\n";
     for (size_t i = 0; i < r.agents.size(); ++i) {
         const AgentReport& a = r.agents[i];

@@ -64,6 +64,13 @@ struct RunReport {
     double trades_per_sec = 0;
     LatencySummary match;          // engine pop -> done
     LatencySummary submit_to_pop;  // merged over agents
+    // Sequencing: commands the engine processed after one submitted later, and how
+    // much later that one was. Zero means the engine saw submit-time order exactly.
+    uint64_t out_of_order = 0;
+    LatencySummary reorder_lag;
+    // Empty polls of the shared mpsc queue that found a claimed but unpublished
+    // cell at its head (a producer mid-push). 0 when no agent uses mpsc.
+    uint64_t mpsc_head_stalls = 0;
     std::vector<AgentReport> agents;
 };
 

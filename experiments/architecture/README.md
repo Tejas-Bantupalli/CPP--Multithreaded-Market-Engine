@@ -132,11 +132,8 @@ capacity-versus-throughput/latency experiment, not an estimate of queue-copy cos
 
 ## Affinity, noise and interpretation
 
-All Mac worker threads request user-initiated QoS. None is pinned. `common.h`
-provides Linux affinity hooks for queue and strategy executables and verifies the
-requested mask; those Linux branches have not been exercised on this Mac. A Mac
-pinning request is rejected explicitly. No Linux futex or pinned-Linux result is
-claimed. CPU pinning is not CPU isolation.
+All Mac worker threads request user-initiated QoS. None is pinned. Requests for
+exact CPU pinning are rejected explicitly; macOS selects the cores.
 
 Samples use `steady_clock`; sub-100-ns measurements are close to this host's timer
 granularity and should not be overinterpreted. CPU nanoseconds/event amortize

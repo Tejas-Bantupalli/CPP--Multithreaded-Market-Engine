@@ -23,17 +23,13 @@ struct EngineConfig {
     uint64_t seed = 1;
     IdlePolicy agent_idle = IdlePolicy::Yield;
     IdlePolicy engine_idle = IdlePolicy::Yield;
-    bool pin_threads = false;   // Linux only
     QosClass qos = QosClass::Inherit;  // macOS: which core class threads ask for
     Fanout fanout = Fanout::Spsc;
     // Limit-up/limit-down: reject new orders priced more than this fraction away from
-    // the initial price. 0 disables. Keeps a feedback loop between agents from
-    // dislocating a thin book by tens of percent inside one session.
+    // the initial price. 0 disables. 
     double collar = 0.05;
     // Venue fees in dollars per unit, applied on every fill. Signed: negative is a
-    // rebate paid to the agent, positive is a fee charged. Real venues pay resting
-    // liquidity and charge liquidity takers, which is what makes queue position
-    // worth money and therefore what makes speed pay.
+    // rebate paid to the agent, positive is a fee charged. 
     TransportKind transport = TransportKind::Spsc;  // default for agents added without one
     double maker_fee = -0.002;
     double taker_fee = 0.003;
@@ -72,6 +68,8 @@ private:
 
     EngineConfig cfg_;
     std::vector<std::unique_ptr<Slot>> slots_;
+    // The inbound queue every Mpsc agent shares. Created by the first one.
+    std::shared_ptr<MPSCQueue<Command, QCAP>> shared_in_;
     std::unique_ptr<Impl> impl_;
     std::atomic<bool> running_{false};
     std::atomic<bool> producers_done_{false};

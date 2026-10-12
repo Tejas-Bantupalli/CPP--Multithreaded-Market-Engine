@@ -10,9 +10,6 @@ def hardware():
     line=query('hw.cachelinesize') if platform.system()=='Darwin' else None
     physical=query('hw.physicalcpu') if platform.system()=='Darwin' else None
     model=query('hw.model') if platform.system()=='Darwin' else platform.machine()
-    if line is None and platform.system()=='Linux':
-        try:line=Path('/sys/devices/system/cpu/cpu0/cache/index0/coherency_line_size').read_text().strip()
-        except OSError:pass
     return {'cache_line_bytes':int(line) if line else None,'physical_cores':int(physical) if physical else None,
             'logical_cpus':os.cpu_count(),'model':model,'source':'runtime hardware query; null means unavailable'}
 def main():

@@ -2,6 +2,19 @@
 
 Every session is one sample. Nothing below is meaningful from a single run.
 
+Start with [the recorded results index](RESULTS.md) for the experiments that
+already have evidence. To inspect an externally orchestrated AI run:
+
+```sh
+python3 agents/session.py status --out results/exp9_field_a
+python3 scripts/trajectory.py results/exp9_field_a
+```
+
+For a new run, `agents/session.py init` writes briefs; external agents write
+`proposal.json` or `strategy.cpp`; `evaluate` compiles, smoke-tests and scores
+the proposals, then writes the next briefs. `status` is read-only. Keep each
+new run in a fresh output directory to preserve earlier evidence.
+
 ## Comparing configurations
 
 ```

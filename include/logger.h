@@ -5,7 +5,6 @@
 
 #include <atomic>
 #include <cstdint>
-#include <fstream>
 #include <string>
 #include <thread>
 
@@ -23,8 +22,8 @@ public:
     void stop(); // drains, flushes, joins
 
     // Engine thread only.
-    void log_trade(const TradeRecord& r) { if (!trades_q_.try_push(r)) ++dropped_trades_; }
-    void log_cmd(const Command& c) { if (!cmds_q_.try_push(c)) ++dropped_cmds_; }
+    void log_trade(const TradeRecord& r) { if (trades_enabled() && !trades_q_.try_push(r)) ++dropped_trades_; }
+    void log_cmd(const Command& c) { if (cmds_enabled() && !cmds_q_.try_push(c)) ++dropped_cmds_; }
 
     uint64_t dropped_trades() const { return dropped_trades_; }
     uint64_t dropped_cmds() const { return dropped_cmds_; }

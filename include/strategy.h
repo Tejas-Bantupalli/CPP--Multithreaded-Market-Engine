@@ -197,13 +197,7 @@ public:
 
     // Wait the way the host was configured to. Only meaningful for polling
     // transports; a blocking one should use wait_poll instead.
-    void idle() const {
-        switch (idle_) {
-            case IdlePolicy::Spin: break;
-            case IdlePolicy::Yield: std::this_thread::yield(); break;
-            case IdlePolicy::Sleep: std::this_thread::sleep_for(std::chrono::microseconds(50)); break;
-        }
-    }
+    void idle() const { wait_when_idle(idle_); }
     void set_idle(IdlePolicy p) { idle_ = p; }   // engine, before the thread starts
 
 private:

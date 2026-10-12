@@ -1,4 +1,4 @@
-CXX ?= g++
+CXX = clang++
 CXXFLAGS ?= -O2 -std=c++17 -pthread -Wall -Wextra -Iinclude
 CPPFLAGS = -MMD -MP
 BUILD_DIR = build
@@ -52,7 +52,7 @@ $(BUILD_DIR)/tools_%.o: tools/%.cpp | $(BUILD_DIR)
 
 -include $(DEPS)
 
-test: $(TEST_TARGET) $(TARGET) $(EXAMPLE_PLUGIN)
+test: $(TEST_TARGET) $(TARGET) $(REPLAY_TARGET) $(EXAMPLE_PLUGIN)
 	python3 tests/run_tests.py $(TEST_TARGET)
 
 run: $(TARGET)

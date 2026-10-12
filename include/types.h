@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <thread>
 
 // ===================== Scalar types =====================
 using Price = int64_t;    // integer ticks; see TICK
@@ -20,16 +21,17 @@ constexpr size_t QCAP = 1 << 14; // per-queue capacity (power of two)
 // How a polling consumer waits when it has nothing to do.
 enum class IdlePolicy { Spin, Yield, Sleep };
 
-// Scheduling class for the engine and agent threads.
-//
-// This exists because "8 cores" can be a lie. An Apple M1 has 4 performance and
-// 4 efficiency cores, and a latency-critical thread that lands on an efficiency
-// core is running slower silicon, not merely contending for time. macOS gives no
-// thread affinity on arm64, so the quality-of-service class is the only lever
-// that decides which kind of core a thread gets. Leaving it uncontrolled puts an
-// unmeasured variable inside every latency number.
-//
-// No-op on Linux, where the honest tool is sched_setaffinity via --pin.
+inline void wait_when_idle(IdlePolicy policy) {
+    switch (policy) {
+        case IdlePolicy::Spin: break;
+        case IdlePolicy::Yield: std::this_thread::yield(); break;
+        case IdlePolicy::Sleep: std::this_thread::sleep_for(std::chrono::microseconds(50)); break;
+    }
+}
+
+
+// macOS scheduling preference for engine and agent threads.
+// QoS does not guarantee placement on a particular core.
 enum class QosClass { Inherit, UserInteractive, UserInitiated, Utility, Background };
 
 inline Ts now_ns() {

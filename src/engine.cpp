@@ -5,31 +5,16 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <stdexcept>
 #include <thread>
 
-#ifdef __linux__
-#include <pthread.h>
-#include <sched.h>
-#endif
-#ifdef __APPLE__
 #include <pthread/qos.h>
-#endif
 
 namespace {
 
-void engine_idle(IdlePolicy p) {
-    switch (p) {
-        case IdlePolicy::Spin: break;
-        case IdlePolicy::Yield: std::this_thread::yield(); break;
-        case IdlePolicy::Sleep: std::this_thread::sleep_for(std::chrono::microseconds(50)); break;
-    }
-}
-
-// Ask the scheduler for a class of core. On Apple Silicon this is what decides
-// performance vs efficiency core placement; there is no affinity API on arm64.
+// QoS is a scheduling preference; macOS still chooses the core.
 void set_qos(QosClass q) {
-#ifdef __APPLE__
     if (q == QosClass::Inherit) return;
     qos_class_t c = QOS_CLASS_DEFAULT;
     switch (q) {
@@ -40,22 +25,6 @@ void set_qos(QosClass q) {
         case QosClass::Inherit:         return;
     }
     pthread_set_qos_class_self_np(c, 0);
-#else
-    (void)q;
-#endif
-}
-
-void pin_to(int cpu) {
-#ifdef __linux__
-    const int n = static_cast<int>(std::thread::hardware_concurrency());
-    if (n <= 0) return;
-    cpu_set_t set;
-    CPU_ZERO(&set);
-    CPU_SET(cpu % n, &set);
-    pthread_setaffinity_np(pthread_self(), sizeof(set), &set);
-#else
-    (void)cpu;
-#endif
 }
 
 } // namespace
@@ -83,10 +52,14 @@ struct Engine::Slot {
     uint64_t events_sent = 0;     // events the engine addressed to this agent
     Histogram submit_to_pop;
 
+    // Mpsc agents push into the engine's shared queue; their private event
+    // channel has a single producer (the engine), so it stays SPSC.
     Slot(AgentId i, std::unique_ptr<Strategy> s, Price px, uint64_t seed, uint64_t market_seed,
-         TransportKind t)
+         TransportKind t, std::shared_ptr<MPSCQueue<Command, QCAP>> shared_in)
         : id(i), strategy(std::move(s)), transport(t),
-          in(make_channel<Command>(t)), out(make_channel<Event>(t)),
+          in(t == TransportKind::Mpsc ? std::make_unique<MpscChannel<Command>>(std::move(shared_in))
+                                      : make_channel<Command>(t)),
+          out(make_channel<Event>(t == TransportKind::Mpsc ? TransportKind::Spsc : t)),
           ctx(i, *in, *out, px, seed, market_seed) {}
 };
 
@@ -102,6 +75,12 @@ struct Engine::Impl {
     Qty volume = 0;
     Price last_px;
     Histogram match;
+    // Sequencing accuracy: commands processed after one with a later t_submit,
+    // and by how much. The per-batch sort removes inversions inside a batch, so
+    // these are the ones the transport let through across batches.
+    Ts max_submit = 0;
+    uint64_t out_of_order = 0;
+    Histogram reorder_lag;
     std::vector<Fill> fills;
     std::vector<CancelInfo> stp;
     std::vector<Command> batch;
@@ -139,7 +118,9 @@ AgentId Engine::add_agent(std::unique_ptr<Strategy> s, TransportKind t) {
     if (running_.load()) throw std::logic_error("add_agent during run");
     const AgentId id = static_cast<AgentId>(slots_.size());
     const uint64_t seed = cfg_.seed * 1000003ULL + id * 7919ULL + 1;
-    slots_.push_back(std::make_unique<Slot>(id, std::move(s), cfg_.initial_px, seed, cfg_.seed, t));
+    if (t == TransportKind::Mpsc && !shared_in_) shared_in_ = std::make_shared<MPSCQueue<Command, QCAP>>();
+    slots_.push_back(std::make_unique<Slot>(id, std::move(s), cfg_.initial_px, seed, cfg_.seed, t,
+                                            t == TransportKind::Mpsc ? shared_in_ : nullptr));
     return id;
 }
 
@@ -201,16 +182,20 @@ void Engine::process(const Command& c) {
         return;
     }
 
-    if (im.collar_hi > 0 && (c.px < im.collar_lo || c.px > im.collar_hi)) {
+    auto reject_order = [&](RejectReason reason) {
         ++owner.orders_rejected;
         Event ev;
         ev.kind = EventKind::Rejected;
         ev.order_id = c.id;
-        ev.reason = RejectReason::Collar;
+        ev.reason = reason;
         ev.side = c.side;
         ev.px = c.px;
         ev.qty = c.qty;
         send(c.agent, ev);
+    };
+
+    if (im.collar_hi > 0 && (c.px < im.collar_lo || c.px > im.collar_hi)) {
+        reject_order(RejectReason::Collar);
         return;
     }
 
@@ -227,15 +212,7 @@ void Engine::process(const Command& c) {
     }
 
     if (!res.accepted) {
-        ++owner.orders_rejected;
-        Event ev;
-        ev.kind = EventKind::Rejected;
-        ev.order_id = c.id;
-        ev.reason = res.reason;
-        ev.side = c.side;
-        ev.px = c.px;
-        ev.qty = c.qty;
-        send(c.agent, ev);
+        reject_order(res.reason);
         return;
     }
 
@@ -310,7 +287,6 @@ void Engine::process(const Command& c) {
 // ===================== Engine thread =====================
 void Engine::engine_loop() {
     set_qos(cfg_.qos);
-    if (cfg_.pin_threads) pin_to(1);
     Impl& im = *impl_;
 
     {
@@ -321,7 +297,19 @@ void Engine::engine_loop() {
         broadcast(start);
     }
 
-    const size_t n = slots_.size();
+    // One lane per private channel, plus one for the shared mpsc queue however
+    // many agents use it. The per-sweep cap scales with the agents behind a lane
+    // so the shared queue is not throttled relative to private rings.
+    struct Lane { Channel<Command>* ch; int cap; };
+    std::vector<Lane> lanes;
+    size_t shared = SIZE_MAX;
+    for (auto& sp : slots_) {
+        if (sp->transport != TransportKind::Mpsc) { lanes.push_back({sp->in.get(), 256}); continue; }
+        if (shared == SIZE_MAX) { shared = lanes.size(); lanes.push_back({sp->in.get(), 0}); }
+        lanes[shared].cap += 256;
+    }
+
+    const size_t n = lanes.size();
     size_t rr = 0;
     std::vector<Command>& batch = im.batch;
 
@@ -330,11 +318,11 @@ void Engine::engine_loop() {
         const bool done = producers_done_.load(std::memory_order_acquire);
         batch.clear();
         for (size_t i = 0; i < n; ++i) {
-            Slot& s = *slots_[(rr + i) % n];
+            const Lane& l = lanes[(rr + i) % n];
             Command c;
             int pops = 0;
-            while (pops < 256 && s.in->pop(c)) {
-                s.submit_to_pop.record(now_ns() - c.t_submit);
+            while (pops < l.cap && l.ch->pop(c)) {
+                slots_[c.agent]->submit_to_pop.record(now_ns() - c.t_submit);
                 batch.push_back(c);
                 ++pops;
             }
@@ -343,7 +331,7 @@ void Engine::engine_loop() {
 
         if (batch.empty()) {
             if (done) break;
-            engine_idle(cfg_.engine_idle);
+            wait_when_idle(cfg_.engine_idle);
             continue;
         }
 
@@ -351,6 +339,12 @@ void Engine::engine_loop() {
                          [](const Command& a, const Command& b) { return a.t_submit < b.t_submit; });
 
         for (const Command& c : batch) {
+            if (c.t_submit < im.max_submit) {
+                ++im.out_of_order;
+                im.reorder_lag.record(im.max_submit - c.t_submit);
+            } else {
+                im.max_submit = c.t_submit;
+            }
             const Ts t0 = now_ns();
             process(c);
             im.match.record(now_ns() - t0);
@@ -374,7 +368,6 @@ void Engine::engine_loop() {
 // ===================== Agent thread =====================
 void Engine::agent_loop(Slot& s) {
     set_qos(cfg_.qos);
-    if (cfg_.pin_threads) pin_to(2 + static_cast<int>(s.id));
     s.ctx.set_idle(cfg_.agent_idle);
     s.strategy->on_start(s.ctx);
     // The strategy owns the loop from here. The default implementation in
@@ -438,6 +431,9 @@ RunReport Engine::build_report(Ts t_start, Ts t_end) {
     r.commands_per_sec = r.session_seconds > 0 ? r.commands / r.session_seconds : 0;
     r.trades_per_sec = r.session_seconds > 0 ? r.trades / r.session_seconds : 0;
     r.match = LatencySummary::from(im.match);
+    r.out_of_order = im.out_of_order;
+    r.reorder_lag = LatencySummary::from(im.reorder_lag);
+    r.mpsc_head_stalls = shared_in_ ? shared_in_->head_stalls() : 0;
 
     Histogram merged;
     for (auto& sp : slots_) {

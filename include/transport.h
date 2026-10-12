@@ -1,28 +1,19 @@
 #pragma once
 
+#include "mpsc_queue.h"
 #include "spsc_queue.h"
 #include "types.h"
 
 #include <chrono>
 #include <condition_variable>
-#include <cstring>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
 
-// ============================================================================
-// Agent <-> engine transport.
-//
-// In a real trading system every firm writes its own market-data path and its
-// own order path. Two desks watching identical exchange packets can be
-// microseconds apart purely because of how they built that plumbing. This
-// abstraction makes the plumbing a variable so it can be measured, with the
-// strategy, the market and the seeds all held identical.
-//
-// Every variant pays the same virtual call (a couple of nanoseconds) and uses
-// the same capacity and the same preallocated storage, so nothing but the
-// synchronisation itself differs between them.
-// ============================================================================
+// Interchangeable channels for transport experiments. All have QCAP-1 usable
+// slots (mpsc: QCAP, shared); only synchronization and waiting differ. SPSC is
+// the default.
 
 template <typename T>
 struct Channel {
@@ -60,6 +51,29 @@ private:
     SPSCQueue<T, QCAP> q_;
 };
 
+// ---------------------------------------------------------------- mpsc
+// One lock-free queue shared by every agent that picks it. Each agent gets its
+// own handle, but all handles push into the same ring and the engine drains it
+// once instead of polling one ring per agent. Only agent -> engine traffic can be
+// multi-producer; engine -> agent always has one producer, so that direction
+// stays SPSC (the engine wires it that way).
+template <typename T>
+class MpscChannel final : public Channel<T> {
+public:
+    using Queue = MPSCQueue<T, QCAP>;
+
+    // A standalone channel owns its own queue; the engine passes a shared one.
+    MpscChannel() : q_(std::make_shared<Queue>()) {}
+    explicit MpscChannel(std::shared_ptr<Queue> q) : q_(std::move(q)) {}
+
+    bool push(const T& v) override { return q_->try_push(v); }
+    bool pop(T& out) override { return q_->try_pop(out); }
+    const char* name() const override { return "mpsc"; }
+
+private:
+    std::shared_ptr<Queue> q_;
+};
+
 // ---------------------------------------------------------------- mutex
 // A mutex-guarded ring of the same capacity, polled by the consumer. Storage is
 // preallocated exactly as above, so the only thing this measures against spsc is
@@ -86,6 +100,14 @@ public:
 
     bool pop(T& out) override {
         std::lock_guard<std::mutex> g(m_);
+        return pop_locked(out);
+    }
+
+    const char* name() const override { return "mutex"; }
+
+protected:
+    // Caller holds m_; shared by polling and blocking consumers.
+    bool pop_locked(T& out) {
         if (count_ == 0) return false;
         out = buf_[head_];
         head_ = (head_ + 1) & (QCAP - 1);
@@ -93,9 +115,6 @@ public:
         return true;
     }
 
-    const char* name() const override { return "mutex"; }
-
-protected:
     std::mutex m_;
     std::vector<T> buf_;
     size_t head_ = 0, tail_ = 0, count_ = 0;
@@ -104,26 +123,14 @@ protected:
 // ---------------------------------------------------------------- mutex_cv
 // Mutex plus condition variable: the consumer parks instead of polling, and the
 // producer signals. This is the version most people write first. It is correct,
-// it burns no CPU while idle, and the wake is a futex round trip through the
-// kernel, which is where the tail latency goes.
+// it parks while idle; scheduler wakeups add latency.
 template <typename T>
 class MutexCvChannel final : public MutexChannel<T> {
     using Base = MutexChannel<T>;
 
 public:
     bool push(const T& v) override {
-        bool ok;
-        {
-            std::lock_guard<std::mutex> g(this->m_);
-            if (this->count_ == Base::USABLE) {
-                ok = false;
-            } else {
-                this->buf_[this->tail_] = v;
-                this->tail_ = (this->tail_ + 1) & (QCAP - 1);
-                ++this->count_;
-                ok = true;
-            }
-        }
+        const bool ok = Base::push(v); // releases the lock before notification
         if (ok) cv_.notify_one();
         return ok;
     }
@@ -134,11 +141,7 @@ public:
             cv_.wait_for(g, std::chrono::nanoseconds(timeout_ns),
                          [this] { return this->count_ != 0; });
         }
-        if (this->count_ == 0) return false;
-        out = this->buf_[this->head_];
-        this->head_ = (this->head_ + 1) & (QCAP - 1);
-        --this->count_;
-        return true;
+        return this->pop_locked(out);
     }
 
     bool blocking() const override { return true; }
@@ -152,12 +155,13 @@ private:
 };
 
 // ---------------------------------------------------------------- selection
-enum class TransportKind { Spsc, Mutex, MutexCv };
+enum class TransportKind { Spsc, Mutex, MutexCv, Mpsc };
 
 inline bool parse_transport(const std::string& s, TransportKind& out) {
     if (s == "spsc") { out = TransportKind::Spsc; return true; }
     if (s == "mutex") { out = TransportKind::Mutex; return true; }
     if (s == "mutex_cv" || s == "mutexcv") { out = TransportKind::MutexCv; return true; }
+    if (s == "mpsc") { out = TransportKind::Mpsc; return true; }
     return false;
 }
 
@@ -166,6 +170,7 @@ inline const char* transport_name(TransportKind k) {
         case TransportKind::Spsc: return "spsc";
         case TransportKind::Mutex: return "mutex";
         case TransportKind::MutexCv: return "mutex_cv";
+        case TransportKind::Mpsc: return "mpsc";
     }
     return "spsc";
 }
@@ -175,6 +180,7 @@ std::unique_ptr<Channel<T>> make_channel(TransportKind k) {
     switch (k) {
         case TransportKind::Mutex: return std::make_unique<MutexChannel<T>>();
         case TransportKind::MutexCv: return std::make_unique<MutexCvChannel<T>>();
+        case TransportKind::Mpsc: return std::make_unique<MpscChannel<T>>(); // standalone; see Engine
         case TransportKind::Spsc: break;
     }
     return std::make_unique<SpscChannel<T>>();

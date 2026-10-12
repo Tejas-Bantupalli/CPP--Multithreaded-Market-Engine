@@ -26,7 +26,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import sweep  # noqa: E402
 
-TRANSPORTS = ["spsc", "mutex", "mutex_cv"]
+TRANSPORTS = ["spsc", "mutex", "mutex_cv", "mpsc"]
 # The strategy every measured agent runs. Identical across transports on purpose:
 # it is the control that makes the comparison causal.
 PROBE = "mm:spread=2,size=5,interval_us=50"

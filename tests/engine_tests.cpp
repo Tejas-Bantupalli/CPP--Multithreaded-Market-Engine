@@ -220,7 +220,7 @@ void multicast_ring() {
 // ---------- transports ----------
 // Every variant must behave identically as a queue. Only its cost differs.
 void transport_channels() {
-    for (TransportKind k : {TransportKind::Spsc, TransportKind::Mutex, TransportKind::MutexCv}) {
+    for (TransportKind k : {TransportKind::Spsc, TransportKind::Mutex, TransportKind::MutexCv, TransportKind::Mpsc}) {
         auto ch = make_channel<Command>(k);
         Command c;
         CHECK(!ch->pop(c));                       // empty
@@ -236,7 +236,8 @@ void transport_channels() {
         // refused rather than blocking or growing.
         size_t depth = 0;
         while (ch->push(make(1, depth + 1, Side::Buy, 100, 1))) ++depth;
-        CHECK(depth == QCAP - 1);
+        // The mpsc ring's sequence numbers tell full from empty, so it uses every cell.
+        CHECK(depth == (k == TransportKind::Mpsc ? QCAP : QCAP - 1));
         CHECK(ch->pop(c));                        // one slot freed
         CHECK(ch->push(make(1, 999999, Side::Buy, 100, 1)));
         CHECK(std::string(ch->name()) == transport_name(k));
@@ -245,6 +246,7 @@ void transport_channels() {
     CHECK(!make_channel<Event>(TransportKind::Spsc)->blocking());
     CHECK(!make_channel<Event>(TransportKind::Mutex)->blocking());
     CHECK(make_channel<Event>(TransportKind::MutexCv)->blocking());
+    CHECK(!make_channel<Event>(TransportKind::Mpsc)->blocking());
 
     // wait_pop must time out on an empty channel and wake on a push.
     {
@@ -260,6 +262,53 @@ void transport_channels() {
         CHECK(ch->wait_pop(ev, 500000000) && ev.px == 12345);
         producer.join();
     }
+}
+
+// Several producers into one MPSC ring: nothing lost or duplicated, payloads
+// intact, and each producer's own messages arrive in the order it sent them.
+void mpsc_concurrent() {
+    struct Message { uint32_t producer; uint64_t sequence, inverse; };
+    MPSCQueue<Message, 64> queue;
+    constexpr uint32_t producers = 4;
+    constexpr uint64_t count = 100000;
+    std::vector<std::thread> threads;
+    for (uint32_t p = 0; p < producers; ++p)
+        threads.emplace_back([&, p] {
+            for (uint64_t i = 0; i < count; ++i)
+                while (!queue.try_push({p, i, ~i})) std::this_thread::yield();
+        });
+    std::vector<uint64_t> next(producers, 0);
+    bool correct = true;
+    for (uint64_t got = 0; got < producers * count;) {
+        Message m;
+        if (!queue.try_pop(m)) { std::this_thread::yield(); continue; }
+        correct = correct && m.producer < producers && m.sequence == next[m.producer]++ && m.inverse == ~m.sequence;
+        ++got;
+    }
+    for (auto& t : threads) t.join();
+    Message m;
+    CHECK(correct && !queue.try_pop(m));
+}
+
+// Exercise wraparound and payload visibility with concurrent producer/consumer.
+void spsc_concurrent() {
+    struct Message { uint64_t sequence, inverse; };
+    SPSCQueue<Message, 64> queue;
+    constexpr uint64_t count = 200000;
+    std::thread producer([&] {
+        for (uint64_t i = 0; i < count; ++i)
+            while (!queue.try_push({i, ~i})) std::this_thread::yield();
+    });
+    bool correct = true;
+    for (uint64_t i = 0; i < count; ++i) {
+        Message message{};
+        while (!queue.try_pop(message)) std::this_thread::yield();
+        if (message.sequence != i || message.inverse != ~i) correct = false;
+    }
+    producer.join();
+    CHECK(correct);
+    Message message{};
+    CHECK(!queue.try_pop(message));
 }
 
 // ---------- engine ----------
@@ -330,6 +379,35 @@ void engine_transport_mixed() {
     double cash = 0, fees = 0;
     for (const AgentReport& a : r.agents) { cash += a.cash; fees += a.fees; }
     CHECK(std::fabs((cash + fees) - INITIAL_CASH * r.agents.size()) < 1e-6);
+}
+
+// Every agent on the shared mpsc queue: same market invariants, nothing lost.
+void engine_transport_mpsc() {
+    EngineConfig cfg = short_cfg(0.4);
+    cfg.transport = TransportKind::Mpsc;
+    conservation_with(cfg);
+}
+
+// Some agents share the mpsc queue, others keep private rings, in one market.
+void engine_transport_mpsc_mixed() {
+    EngineConfig cfg = short_cfg(0.4);
+    Engine e(cfg);
+    const TransportKind ks[4] = {TransportKind::Mpsc, TransportKind::Spsc, TransportKind::Mpsc, TransportKind::Mpsc};
+    e.add_agent(make_strategy("mm", Params{}), ks[0]);
+    e.add_agent(make_strategy("noise", Params{}), ks[1]);
+    e.add_agent(make_strategy("noise", Params{}), ks[2]);
+    e.add_agent(make_strategy("noise", Params{}), ks[3]);
+    const RunReport r = e.run();
+    CHECK(r.trades > 0);
+    uint64_t submitted = 0;
+    for (int i = 0; i < 4; ++i) {
+        CHECK(r.agents[i].transport == transport_name(ks[i]));
+        CHECK(r.agents[i].orders_processed == r.agents[i].submitted); // attributed to the right agent
+        CHECK(r.agents[i].submit_to_pop.count == r.agents[i].orders_processed);
+        submitted += r.agents[i].submitted;
+    }
+    CHECK(submitted == r.commands);
+    CHECK(r.out_of_order < r.commands);
 }
 
 void engine_multicast() {
@@ -512,6 +590,8 @@ int main(int argc, char** argv) {
         else if (name == "book_rejects") book_rejects();
         else if (name == "histogram") histogram();
         else if (name == "spsc_wraparound") spsc_wraparound();
+        else if (name == "spsc_concurrent") spsc_concurrent();
+        else if (name == "mpsc_concurrent") mpsc_concurrent();
         else if (name == "engine_conservation") engine_conservation();
         else if (name == "transport_channels") transport_channels();
         else if (name == "engine_transport_mutex") engine_transport_mutex();
@@ -519,6 +599,8 @@ int main(int argc, char** argv) {
         else if (name == "engine_transport_mixed") engine_transport_mixed();
         else if (name == "engine_custom_run_loop") engine_custom_run_loop();
         else if (name == "engine_multicast") engine_multicast();
+        else if (name == "engine_transport_mpsc") engine_transport_mpsc();
+        else if (name == "engine_transport_mpsc_mixed") engine_transport_mpsc_mixed();
         else if (name == "engine_collar") engine_collar();
         else if (name == "engine_fees") engine_fees();
         else if (name == "multicast_ring") multicast_ring();

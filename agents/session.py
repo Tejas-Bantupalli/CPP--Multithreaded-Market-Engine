@@ -167,6 +167,8 @@ def write_brief(out, cfg, sub, gen, rows, report, error=None):
         parts.append(f"OUTPUT\nWrite exactly one file: {target}\n"
                      "It must be the complete plugin source. Put your rationale in a comment block at the top "
                      "of the file. Then stop.\n")
+    if cfg.get("brief_extra"):
+        parts.append(cfg["brief_extra"])
     (d / "brief.md").write_text("\n".join(parts))
     return d / "brief.md"
 
@@ -192,6 +194,7 @@ def cmd_init(args):
         "subjects": subjects, "background": [b for b in args.background.split(";" if ";" in args.background else ",") if b],
         "seeds": args.seeds, "seconds": args.seconds, "generations": args.generations,
         "fixed_seeds": args.fixed_seeds, "parallel": args.parallel, "binary": args.binary,
+        "brief_extra": Path(args.brief_extra).read_text() if args.brief_extra else "",
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
     (out / "config.json").write_text(json.dumps(cfg, indent=1))
@@ -340,6 +343,9 @@ def main():
     a.add_argument("--fixed-seeds", action="store_true")
     a.add_argument("--parallel", type=int, default=3)
     a.add_argument("--binary", default=str(sweep.DEFAULT_BINARY))
+    a.add_argument("--brief-extra", default="",
+                   help="file whose text is appended verbatim to every brief (extra instrumentation, "
+                        "e.g. asking each agent to record a forecast). Must not hint at strategy content.")
     a.add_argument("--force", action="store_true")
     a.set_defaults(fn=cmd_init)
 

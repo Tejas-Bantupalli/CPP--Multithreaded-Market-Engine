@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Market Lab — Strategy Research</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head>
+<body>
+<div class="shell">
+<aside class="sidebar">
+  <a class="brand" href="/" aria-label="Market Lab home"><span class="brand-mark">M<span>↗</span></span><span>MARKET<span class="brand-light">LAB</span></span></a>
+  <div class="workspace"><span class="workspace-icon">T</span><div>Research workspace<small>Local · C++17 engine</small></div><span class="tiny-dot"></span></div>
+  <p class="nav-label">WORKSPACE</p>
+  <button class="nav active" id="nav-experiments"><span>◫</span> Experiments <small id="run-count">—</small></button>
+  <button class="nav" id="nav-new"><span>＋</span> New experiment</button>
+  <button class="nav" id="nav-connection"><span>⌘</span> Model connection <i id="connection-dot"></i></button>
+  <div class="sidebar-bottom"><span class="status-dot"></span> Engine runs on your Mac<p>Ideas become code.<br>Evidence comes next.</p><span class="version">MARKET ENGINE / RESEARCH EDITION</span></div>
+</aside>
+<div class="main-shell">
+<header class="topbar"><div><span class="muted">Workspace</span><span class="slash">/</span><span id="breadcrumb">Experiments</span></div><div class="top-meta"><span class="status-dot"></span> LOCAL ENVIRONMENT <span class="avatar">TB</span></div></header>
+<main>
+<section id="library-view">
+  <div class="page-heading"><div><p class="eyebrow">STRATEGY RESEARCH</p><h1>The experiment bench.</h1><p class="subtitle">Build strategies. Test your assumptions. Follow the evidence.</p></div><button class="primary" id="new-experiment">＋ New experiment</button></div>
+  <div class="overview-grid" id="overview"></div>
+  <div class="section-bar"><div class="tabs" id="library-tabs"><button class="selected" data-filter="all">All experiments</button><button data-filter="ai">AI research</button><button data-filter="control">Controls</button></div><label class="search"><span>⌕</span><input id="search" placeholder="Find an experiment…" aria-label="Find an experiment"></label></div>
+  <div class="experiment-grid" id="experiment-grid"><p class="empty">Loading your research…</p></div>
+  <div class="bottom-note"><span>↗</span><div><strong>A market, not a backtest.</strong><p>Independent strategies trade against each other through a single matching engine. Every curve comes from recorded sessions.</p></div></div>
+</section>
+<section id="create-view" hidden>
+ <div class="page-heading"><div><p class="eyebrow">NEW EXPERIMENT</p><h1>Start with an idea.</h1><p class="subtitle">Describe the strategies. The model writes the C++. The engine puts it to the test.</p></div><button class="secondary" id="back-library">← All experiments</button></div>
+ <form id="experiment-form">
+ <div class="builder-grid"><div>
+ <section class="panel"><div class="panel-title"><span class="step">01</span><h2>The research brief</h2><span class="tag">YOUR HYPOTHESIS</span></div>
+ <label>Experiment name<input id="experiment-title" value="Market makers, different instincts" maxlength="120" required></label>
+ <label>What should the strategies try?<textarea id="prompt" rows="5" placeholder="Compare four market makers with different approaches to inventory risk…">Create market-making strategies that compete on spread capture while keeping inventory bounded. Explore whether different approaches to inventory risk produce more consistent returns.</textarea></label>
+ <div class="prompt-hint">✧ Each AI agent receives this brief, its own mandate, and the feedback you allow.</div></section>
+ <section class="panel"><div class="panel-title"><span class="step">02</span><h2>The strategy lineup</h2><button type="button" class="text-button" id="add-strategy">＋ Add strategy</button></div><div id="strategy-list"></div><p class="field-note">Four background traders provide liquidity and noise. Add up to eight competing strategies.</p></section>
+ </div><div class="builder-side">
+ <section class="panel"><div class="panel-title"><span class="step">03</span><h2>Run conditions</h2></div>
+ <div class="number-grid"><label>Generations<input id="generations" type="number" min="1" max="20" value="3" required></label><label>Seeds / generation<input id="seeds" type="number" min="1" max="30" value="4" required></label></div>
+ <label>Seconds / session<input id="seconds" type="number" min="0.1" max="30" step="0.1" value="2" required></label>
+ <label>Feedback to agents<select id="feedback"><option value="rivals">Own results + market + rivals</option><option value="market">Own results + market</option><option value="own">Own results only</option></select></label>
+ <label class="checkbox"><input id="capture-logs" type="checkbox" checked><span>Capture trade & command logs<small>Download CSV files after each run.</small></span></label>
+ <div class="estimate"><span>Planned sessions</span><strong id="session-estimate">12</strong></div><p class="field-note">Seeds run sequentially. Generation and compilation time is additional.</p></section>
+ <section class="panel model-panel"><div class="panel-title"><h2>Model connection</h2><span class="tag">CLAUDE API</span></div><p id="model-summary">Checking connection…</p><button type="button" class="secondary full" id="configure-model">Configure connection ↗</button></section>
+ <div class="launch-box"><p>AI code is compiled and executed on this Mac. Review generated sources in the run’s artifacts.</p><button class="primary full" type="submit" id="launch">Run experiment <span>→</span></button><p id="form-error" role="alert" class="error" hidden></p></div>
+ </div></div></form>
+</section>
+<section id="detail-view" hidden><div id="detail-content"></div></section>
+</main><footer>MARKET LAB <span>Local simulation · Results depend on seeds and scheduling.</span><span>C++ ENGINE / AI STRATEGIES</span></footer>
+</div></div>
+<dialog id="connection-dialog"><form id="connection-form"><div class="dialog-heading"><div><p class="eyebrow">MODEL CONNECTION</p><h2>Connect your strategy writer.</h2></div><button type="button" class="icon-button" id="close-connection" aria-label="Close connection settings">×</button></div><p>Claude writes and revises strategies between generations. The C++ engine runs each trading session.</p><label>Model ID<input id="model-id" value="claude-opus-5" required></label><label>Anthropic API key<input id="api-key" type="password" autocomplete="off" placeholder="Use ANTHROPIC_API_KEY or enter a key"></label><p class="field-note" id="credential-note">Keys stay in memory for this page and active run. They are never saved in experiment files.</p><button class="primary full" type="submit">Use this connection</button></form></dialog>
+<dialog id="source-dialog"><div class="dialog-heading"><h2 id="source-title">Source</h2><button class="icon-button" id="close-source" aria-label="Close source preview">×</button></div><pre id="source-code"></pre></dialog>
+<div id="toast" role="status" hidden></div>
+</body></html>

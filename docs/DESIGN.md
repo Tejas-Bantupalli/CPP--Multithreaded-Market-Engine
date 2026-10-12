@@ -133,11 +133,13 @@ so recording is a couple of integer ops. Reported as p50/p90/p99/p99.9/max.
 Runs are nondeterministic by construction. Compare strategies over many seeds
 and report distributions. The `--cmdlog` option records every processed
 command in engine order; `build/replay` replays it through `OrderBook` and
-reports the trade count and a book checksum, which must match the session's.
+reports the trade count and a book checksum. For an exact comparison, use
+`--collar 0` and confirm no command-log records were dropped: replay does not
+apply the engine's price collar.
 
 ## Not done yet
 
-* Thread pinning is Linux only (`--pin`).
+* macOS QoS expresses a scheduling preference; it does not pin a thread.
 * No risk limits at the engine; strategies police their own inventory.
 * The background market (market maker plus noise traders) is deliberately
   simple. Tune it before drawing conclusions about strategy quality.

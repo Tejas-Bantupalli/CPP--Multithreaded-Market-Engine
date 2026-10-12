@@ -133,9 +133,7 @@ int main(int argc,char**argv){
         if(count<1||count>2000000||rate<0||(inc!=0&&inc!=1)||(heap!=0&&heap!=1)||
            (book!="dense"&&book!="tree")||(topology!="inline"&&topology!="pipeline"&&topology!="cached")||
            (profile!="dense"&&profile!="sparse"))throw std::runtime_error("Invalid configuration");
-#ifndef __linux__
-        if(pcpu>=0||ccpu>=0)throw std::runtime_error("Exact affinity requires Linux in this benchmark");
-#endif
+        if(pcpu>=0||ccpu>=0)throw std::runtime_error("Exact CPU pinning is unavailable on macOS");
         std::vector<Wire> trace;trace.reserve(count);std::mt19937 rng(seed);int price=10000;
         for(int i=0;i<count;++i){
             price=std::clamp(price+int(rng()%7)-3,9900,10100);
